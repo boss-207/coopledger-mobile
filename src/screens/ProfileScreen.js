@@ -13,7 +13,8 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { signOut } from 'firebase/auth';
-import { auth } from '../config/firebase';
+import { auth, db } from '../config/firebase';
+import { doc, updateDoc } from 'firebase/firestore';
 import {
   getWalletAddress,
   importWalletFromPrivateKey,
@@ -35,6 +36,9 @@ export default function ProfileScreen({ userData }) {
   const [pkInput, setPkInput] = useState('');
   const [importLoading, setImportLoading] = useState(false);
 
+  const [telephoneInput, setTelephoneInput] = useState('');
+  const [telephoneSaveLoading, setTelephoneSaveLoading] = useState(false);
+
   const contractOk = isContractConfigured();
 
   useEffect(() => {
@@ -42,6 +46,59 @@ export default function ProfileScreen({ userData }) {
       .then(setWalletAddress)
       .catch(() => setWalletAddress(null));
   }, []);
+
+  useEffect(() => {
+    setTelephoneInput(userData?.telephone || '');
+  }, [userData?.telephone]);
+
+  /** E.164 international : + puis indicatif pays (ex. +228…) */
+  function validateTelephoneE164(value) {
+    const trimmed = String(value || '').trim().replace(/\s/g, '');
+    if (!trimmed) return { ok: false, message: 'Indique un numéro ou laisse vide.' };
+    if (!trimmed.startsWith('+')) {
+      return { ok: false, message: 'Le numéro doit commencer par + (format international).' };
+    }
+    if (!/^\+[1-9]\d{7,14}$/.test(trimmed)) {
+      return {
+        ok: false,
+        message: 'Format invalide. Exemple : +22890123456 (8 à 15 chiffres après le +).',
+      };
+    }
+    return { ok: true, value: trimmed };
+  }
+
+  async function sauvegarderTelephone() {
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      Alert.alert('Erreur', 'Tu dois être connecté.');
+      return;
+    }
+    const raw = telephoneInput.trim();
+    if (!raw) {
+      setTelephoneSaveLoading(true);
+      try {
+        await updateDoc(doc(db, 'users', uid), { telephone: null });
+        Alert.alert('Enregistré', 'Numéro retiré du profil.');
+      } catch (e) {
+        Alert.alert('Erreur', e.message || 'Sauvegarde impossible.');
+      }
+      setTelephoneSaveLoading(false);
+      return;
+    }
+    const check = validateTelephoneE164(raw);
+    if (!check.ok) {
+      Alert.alert('Numéro invalide', check.message);
+      return;
+    }
+    setTelephoneSaveLoading(true);
+    try {
+      await updateDoc(doc(db, 'users', uid), { telephone: check.value });
+      Alert.alert('Enregistré', 'Ton numéro WhatsApp / SMS a été sauvegardé (format international).');
+    } catch (e) {
+      Alert.alert('Erreur', e.message || 'Sauvegarde impossible.');
+    }
+    setTelephoneSaveLoading(false);
+  }
 
   function handleDeconnexion() {
     Alert.alert(
@@ -199,6 +256,30 @@ export default function ProfileScreen({ userData }) {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>👤 Mon Compte</Text>
         <InfoRow icon="✉️" label="Email" value={userData?.email || '-'} />
+        <Text style={styles.phoneHelp}>
+          Numéro WhatsApp / SMS (international, ex. +22890123456). Utilisé pour les alertes de vote.
+        </Text>
+        <TextInput
+          style={styles.phoneInput}
+          placeholder="+22890123456"
+          placeholderTextColor="#9ca3af"
+          keyboardType="phone-pad"
+          autoCapitalize="none"
+          autoCorrect={false}
+          value={telephoneInput}
+          onChangeText={setTelephoneInput}
+        />
+        <TouchableOpacity
+          style={[styles.smallBtn, telephoneSaveLoading && { opacity: 0.65 }, { alignSelf: 'flex-start', marginTop: 10 }]}
+          onPress={sauvegarderTelephone}
+          disabled={telephoneSaveLoading}
+        >
+          {telephoneSaveLoading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.smallBtnText}>Enregistrer le numéro</Text>
+          )}
+        </TouchableOpacity>
         <InfoRow icon="🏷️" label="Rôle (Firebase)" value={roleLabels[userData?.role] || userData?.role} />
         <InfoRow icon="🆔" label="UID" value={userData?.uid?.slice(0, 12) + '...' || '-'} />
         <InfoRow icon="📅" label="Membre depuis" value={
@@ -276,6 +357,24 @@ const styles = StyleSheet.create({
   warnBanner: {
     fontSize: 12, color: '#92400e', backgroundColor: '#fffbeb',
     padding: 10, borderRadius: 10, marginBottom: 10,
+  },
+  phoneHelp: {
+    fontSize: 12,
+    color: '#6b7280',
+    lineHeight: 17,
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  phoneInput: {
+    borderWidth: 1.5,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+    backgroundColor: '#f9fafb',
   },
   infoRow: {
     flexDirection: 'row', alignItems: 'center',

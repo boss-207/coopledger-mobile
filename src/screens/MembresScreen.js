@@ -14,6 +14,7 @@ import {
 import {
   collection,
   doc,
+  addDoc,
   onSnapshot,
   query,
   updateDoc,
@@ -21,6 +22,7 @@ import {
   writeBatch,
   getDocs,
   setDoc,
+  Timestamp,
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
 
@@ -90,18 +92,26 @@ export default function MembresScreen({ userData }) {
   const [users, setUsers] = useState([]);
   const [votesByUser, setVotesByUser] = useState({});
   const [openVotesCount, setOpenVotesCount] = useState(0);
+  const [openTransferCount, setOpenTransferCount] = useState(0);
+  const [openFinancialCount, setOpenFinancialCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
 
   const [addModalVisible, setAddModalVisible] = useState(false);
   const [roleModalVisible, setRoleModalVisible] = useState(false);
-  const [transferModalVisible, setTransferModalVisible] = useState(false);
   const [selectedMember, setSelectedMember] = useState(null);
 
   const [newNom, setNewNom] = useState('');
   const [newEmail, setNewEmail] = useState('');
-  const [pendingTransferId, setPendingTransferId] = useState(null);
+
+  // Transferts par vote (président uniquement)
+  const [modalPickPresident, setModalPickPresident] = useState(false);
+  const [modalPickTresorier, setModalPickTresorier] = useState(false);
+  const [candidatePresidentId, setCandidatePresidentId] = useState(null);
+  const [candidateTresorierId, setCandidateTresorierId] = useState(null);
+  const [raisonPresident, setRaisonPresident] = useState('');
+  const [raisonTresorier, setRaisonTresorier] = useState('');
 
   const canManage = userData?.role === 'president';
   const coopId = userData?.cooperativeId || 'broukou';
@@ -137,11 +147,24 @@ export default function MembresScreen({ userData }) {
       () => {}
     );
 
-    const openVotesQ = query(collection(db, 'votes'), where('statut', '==', 'ouvert'));
+    const openVotesQ = query(
+      collection(db, 'votes'),
+      where('cooperativeId', '==', coopId),
+      where('statut', '==', 'ouvert')
+    );
     const unsubOpenVotes = onSnapshot(
       openVotesQ,
       (snap) => {
         setOpenVotesCount(snap.size);
+        let transfer = 0;
+        let financial = 0;
+        snap.docs.forEach((d) => {
+          const v = d.data();
+          if (v.type === 'transfert_presidence' || v.type === 'transfert_tresorier') transfer += 1;
+          else financial += 1;
+        });
+        setOpenTransferCount(transfer);
+        setOpenFinancialCount(financial);
       },
       () => {}
     );
@@ -216,35 +239,6 @@ export default function MembresScreen({ userData }) {
     }
   }
 
-  async function applyTransferPresidence(targetMember) {
-    if (!targetMember) return;
-    if (targetMember.role === 'president') {
-      Alert.alert('Info', 'Ce membre est déjà président.');
-      return;
-    }
-
-    setActionLoading(true);
-    try {
-      const presidentActuel = users.find((u) => u.role === 'president');
-      if (!presidentActuel) {
-        Alert.alert('Erreur', 'Aucun président actuel trouvé.');
-        return;
-      }
-
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'users', presidentActuel.id), { role: 'membre' });
-      batch.update(doc(db, 'users', targetMember.id), { role: 'president' });
-      await batch.commit();
-      Alert.alert('Succès', `La présidence a été transférée à ${targetMember.nom}.`);
-    } catch {
-      Alert.alert('Erreur', 'Impossible de transférer la présidence.');
-    } finally {
-      setActionLoading(false);
-      setTransferModalVisible(false);
-      setPendingTransferId(null);
-    }
-  }
-
   async function handleSetRole(member, nextRole) {
     if (!member) return;
     if (member.role === nextRole) {
@@ -255,10 +249,10 @@ export default function MembresScreen({ userData }) {
     if (nextRole === 'president') {
       Alert.alert(
         'Confirmation',
-        `Attention : vous allez transférer la présidence à ${member.nom}. Vous deviendrez membre. Confirmer ?`,
+        `Le transfert de présidence se fait désormais par vote (section "Transferts").`,
         [
           { text: 'Annuler', style: 'cancel' },
-          { text: 'Confirmer', style: 'destructive', onPress: () => applyTransferPresidence(member) },
+          { text: 'OK', style: 'default' },
         ]
       );
       return;
@@ -331,6 +325,163 @@ export default function MembresScreen({ userData }) {
     );
   }
 
+  const presidentActuel = useMemo(() => users.find((u) => u.role === 'president'), [users]);
+  const tresorierActuel = useMemo(() => users.find((u) => u.role === 'tresorier'), [users]);
+
+  const transfertBloque = openVotesCount > 0;
+  const transfertMsg = openTransferCount > 0
+    ? 'Un vote de transfert est déjà en cours. Attendez la fin du vote.'
+    : openFinancialCount > 0
+      ? 'Un vote est déjà en cours. Attendez la fin du vote.'
+      : null;
+
+  async function proposerTransfert({ type, candidat }) {
+    if (!canManage) return;
+    if (transfertBloque) {
+      Alert.alert('Action impossible', transfertMsg || 'Un vote est en cours.');
+      return;
+    }
+    if (!candidat) {
+      Alert.alert('Information', 'Sélectionne un membre actif.');
+      return;
+    }
+
+    // Règles : éviter auto-proposition invalide
+    if (type === 'transfert_presidence' && candidat.role === 'president') {
+      Alert.alert('Information', 'Le candidat est déjà président.');
+      return;
+    }
+    if (type === 'transfert_tresorier' && (candidat.role === 'tresorier' || candidat.role === 'president')) {
+      Alert.alert('Information', 'Choisis un membre actif (pas le trésorier actuel, pas le président).');
+      return;
+    }
+
+    const totalMembres = activeMembers.length;
+    const now = new Date();
+    const expires = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+
+    const voteBase = {
+      type,
+      candidatUid: candidat.id,
+      candidatNom: candidat.nom || 'Candidat',
+      creeParUid: userData?.uid,
+      creeParNom: userData?.nom || (presidentActuel?.nom || 'Président'),
+      statut: 'ouvert',
+      votesOui: 0,
+      votesNon: 0,
+      totalMembres,
+      quorumRequis: 60,
+      cooperativeId: coopId,
+      dateCreation: Timestamp.fromDate(now),
+      dateExpiration: Timestamp.fromDate(expires),
+    };
+
+    if (type === 'transfert_presidence') {
+      const raison = raisonPresident.trim();
+      const payload = {
+        ...voteBase,
+        titre: `Transfert de présidence à ${candidat.nom}`,
+        description:
+          `Le président ${presidentActuel?.nom || 'actuel'} propose ${candidat.nom} comme nouveau président de la coopérative CTA de Broukou.`,
+        ancienRoleUid: presidentActuel?.id || userData?.uid,
+        ancienRoleNom: presidentActuel?.nom || userData?.nom || 'Président',
+        ancienRole: 'president',
+        nouveauRole: 'president',
+        raisonTransfert: raison || null,
+      };
+
+      Alert.alert(
+        'Confirmation',
+        `Êtes-vous sûr de proposer ${candidat.nom} comme nouveau président ?`,
+        [
+          { text: 'Annuler', style: 'cancel' },
+          {
+            text: 'Continuer',
+            style: 'destructive',
+            onPress: () => {
+              Alert.alert(
+                'Confirmation finale',
+                'Tous les membres voteront pendant 24 heures. Confirmer ?',
+                [
+                  { text: 'Annuler', style: 'cancel' },
+                  {
+                    text: 'Confirmer',
+                    style: 'destructive',
+                    onPress: async () => {
+                      setActionLoading(true);
+                      try {
+                        await addDoc(collection(db, 'votes'), payload);
+                        setCandidatePresidentId(null);
+                        setRaisonPresident('');
+                        Alert.alert('Succès', 'Vote de transfert de présidence créé.');
+                      } catch (e) {
+                        Alert.alert('Erreur', e?.message || 'Impossible de créer le vote.');
+                      }
+                      setActionLoading(false);
+                    },
+                  },
+                ]
+              );
+            },
+          },
+        ]
+      );
+      return;
+    }
+
+    if (type === 'transfert_tresorier') {
+      const raison = raisonTresorier.trim();
+      const payload = {
+        ...voteBase,
+        titre: `Changement de trésorier → ${candidat.nom}`,
+        description:
+          `Le président ${presidentActuel?.nom || 'actuel'} propose ${candidat.nom} comme nouveau trésorier de la coopérative CTA de Broukou.`,
+        ancienRoleUid: tresorierActuel?.id || null,
+        ancienRoleNom: tresorierActuel?.nom || 'Trésorier',
+        ancienRole: 'tresorier',
+        nouveauRole: 'tresorier',
+        raisonTransfert: raison || null,
+      };
+
+      Alert.alert(
+        'Confirmation',
+        `Êtes-vous sûr de proposer ${candidat.nom} comme nouveau trésorier ?`,
+        [
+          { text: 'Annuler', style: 'cancel' },
+          {
+            text: 'Continuer',
+            style: 'destructive',
+            onPress: () => {
+              Alert.alert(
+                'Confirmation finale',
+                'Tous les membres voteront pendant 24 heures. Confirmer ?',
+                [
+                  { text: 'Annuler', style: 'cancel' },
+                  {
+                    text: 'Confirmer',
+                    style: 'destructive',
+                    onPress: async () => {
+                      setActionLoading(true);
+                      try {
+                        await addDoc(collection(db, 'votes'), payload);
+                        setCandidateTresorierId(null);
+                        setRaisonTresorier('');
+                        Alert.alert('Succès', 'Vote de changement de trésorier créé.');
+                      } catch (e) {
+                        Alert.alert('Erreur', e?.message || 'Impossible de créer le vote.');
+                      }
+                      setActionLoading(false);
+                    },
+                  },
+                ]
+              );
+            },
+          },
+        ]
+      );
+    }
+  }
+
   if (loading) {
     return (
       <View style={styles.centered}>
@@ -390,12 +541,94 @@ export default function MembresScreen({ userData }) {
         )}
         ListFooterComponent={
           canManage ? (
-            <TouchableOpacity
-              style={styles.transferBtn}
-              onPress={() => setTransferModalVisible(true)}
-            >
-              <Text style={styles.transferBtnText}>🔄 Transférer la présidence</Text>
-            </TouchableOpacity>
+            <View style={styles.transfersSection}>
+              <Text style={styles.transfersTitle}>Transferts (vote démocratique)</Text>
+              {transfertMsg ? (
+                <View style={styles.transfersLockedBox}>
+                  <Text style={styles.transfersLockedText}>{transfertMsg}</Text>
+                </View>
+              ) : null}
+
+              <View style={[styles.transferCard, { borderColor: '#7c3aed33' }]}>
+                <Text style={[styles.transferCardTitle, { color: '#7c3aed' }]}>🛡️ Transférer la Présidence</Text>
+                <Text style={styles.transferCardDesc}>
+                  Cette décision sera soumise au vote de tous les membres pendant 24 heures.
+                </Text>
+
+                <TouchableOpacity
+                  style={styles.selector}
+                  onPress={() => setModalPickPresident(true)}
+                  disabled={transfertBloque}
+                >
+                  <Text style={styles.selectorLabel}>Candidat</Text>
+                  <Text style={styles.selectorValue}>
+                    {candidatePresidentId
+                      ? (activeMembers.find((m) => m.id === candidatePresidentId)?.nom || '—')
+                      : 'Choisir un membre actif…'}
+                  </Text>
+                </TouchableOpacity>
+
+                <TextInput
+                  style={styles.reasonInput}
+                  placeholder="Raison du transfert (optionnel)"
+                  value={raisonPresident}
+                  onChangeText={setRaisonPresident}
+                  editable={!transfertBloque}
+                  multiline
+                />
+
+                <TouchableOpacity
+                  style={[styles.btnPres, (transfertBloque || actionLoading) && { opacity: 0.6 }]}
+                  onPress={() => {
+                    const candidat = activeMembers.find((m) => m.id === candidatePresidentId);
+                    proposerTransfert({ type: 'transfert_presidence', candidat });
+                  }}
+                  disabled={transfertBloque || actionLoading}
+                >
+                  <Text style={styles.btnPresText}>Proposer le transfert</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={[styles.transferCard, { borderColor: '#1d4ed833' }]}>
+                <Text style={[styles.transferCardTitle, { color: '#1d4ed8' }]}>🏦 Changer le Trésorier</Text>
+                <Text style={styles.transferCardDesc}>
+                  Cette décision sera soumise au vote de tous les membres pendant 24 heures.
+                </Text>
+
+                <TouchableOpacity
+                  style={styles.selector}
+                  onPress={() => setModalPickTresorier(true)}
+                  disabled={transfertBloque}
+                >
+                  <Text style={styles.selectorLabel}>Candidat</Text>
+                  <Text style={styles.selectorValue}>
+                    {candidateTresorierId
+                      ? (activeMembers.find((m) => m.id === candidateTresorierId)?.nom || '—')
+                      : 'Choisir un membre actif…'}
+                  </Text>
+                </TouchableOpacity>
+
+                <TextInput
+                  style={styles.reasonInput}
+                  placeholder="Raison du changement (optionnel)"
+                  value={raisonTresorier}
+                  onChangeText={setRaisonTresorier}
+                  editable={!transfertBloque}
+                  multiline
+                />
+
+                <TouchableOpacity
+                  style={[styles.btnTres, (transfertBloque || actionLoading) && { opacity: 0.6 }]}
+                  onPress={() => {
+                    const candidat = activeMembers.find((m) => m.id === candidateTresorierId);
+                    proposerTransfert({ type: 'transfert_tresorier', candidat });
+                  }}
+                  disabled={transfertBloque || actionLoading}
+                >
+                  <Text style={styles.btnTresText}>Proposer le changement</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           ) : null
         }
       />
@@ -466,11 +699,12 @@ export default function MembresScreen({ userData }) {
         </View>
       </Modal>
 
-      <Modal visible={transferModalVisible} transparent animationType="slide">
+      {/* Sélecteur candidat présidence */}
+      <Modal visible={modalPickPresident} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCardLarge}>
-            <Text style={styles.modalTitle}>Transférer la présidence</Text>
-            <ScrollView style={{ maxHeight: 280 }}>
+            <Text style={styles.modalTitle}>Choisir le candidat (présidence)</Text>
+            <ScrollView style={{ maxHeight: 320 }}>
               {activeMembers
                 .filter((m) => m.role !== 'president')
                 .map((m) => (
@@ -478,51 +712,58 @@ export default function MembresScreen({ userData }) {
                     key={m.id}
                     style={[
                       styles.transferOption,
-                      pendingTransferId === m.id && styles.transferOptionActive,
+                      candidatePresidentId === m.id && styles.transferOptionActive,
                     ]}
-                    onPress={() => setPendingTransferId(m.id)}
+                    onPress={() => setCandidatePresidentId(m.id)}
                   >
                     <Text style={styles.transferOptionText}>{m.nom}</Text>
-                    <Text style={styles.transferOptionSub}>
-                      {ROLE_LABELS[m.role] || m.role}
-                    </Text>
+                    <Text style={styles.transferOptionSub}>{ROLE_LABELS[m.role] || m.role}</Text>
                   </TouchableOpacity>
                 ))}
             </ScrollView>
 
             <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={styles.cancelBtn}
-                onPress={() => {
-                  setTransferModalVisible(false);
-                  setPendingTransferId(null);
-                }}
-              >
-                <Text style={styles.cancelText}>Annuler</Text>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalPickPresident(false)}>
+                <Text style={styles.cancelText}>Fermer</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.confirmBtn}
-                onPress={() => {
-                  const target = activeMembers.find((m) => m.id === pendingTransferId);
-                  if (!target) {
-                    Alert.alert('Information', 'Sélectionne un membre.');
-                    return;
-                  }
-                  Alert.alert(
-                    'Confirmation finale',
-                    `Transférer la présidence à ${target.nom} ? Cette action est sensible.`,
-                    [
-                      { text: 'Annuler', style: 'cancel' },
-                      {
-                        text: 'Confirmer',
-                        style: 'destructive',
-                        onPress: () => applyTransferPresidence(target),
-                      },
-                    ]
-                  );
-                }}
-              >
-                <Text style={styles.confirmText}>Transférer</Text>
+              <TouchableOpacity style={styles.confirmBtn} onPress={() => setModalPickPresident(false)}>
+                <Text style={styles.confirmText}>Valider</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Sélecteur candidat trésorier */}
+      <Modal visible={modalPickTresorier} transparent animationType="slide">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCardLarge}>
+            <Text style={styles.modalTitle}>Choisir le candidat (trésorier)</Text>
+            <ScrollView style={{ maxHeight: 320 }}>
+              {activeMembers
+                .filter((m) => m.role !== 'president')
+                .filter((m) => m.role !== 'tresorier')
+                .map((m) => (
+                  <TouchableOpacity
+                    key={m.id}
+                    style={[
+                      styles.transferOption,
+                      candidateTresorierId === m.id && styles.transferOptionActive,
+                    ]}
+                    onPress={() => setCandidateTresorierId(m.id)}
+                  >
+                    <Text style={styles.transferOptionText}>{m.nom}</Text>
+                    <Text style={styles.transferOptionSub}>{ROLE_LABELS[m.role] || m.role}</Text>
+                  </TouchableOpacity>
+                ))}
+            </ScrollView>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalPickTresorier(false)}>
+                <Text style={styles.cancelText}>Fermer</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.confirmBtn} onPress={() => setModalPickTresorier(false)}>
+                <Text style={styles.confirmText}>Valider</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -613,16 +854,63 @@ const styles = StyleSheet.create({
   removeBtn: { backgroundColor: '#fef2f2', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7 },
   removeBtnText: { color: '#b91c1c', fontSize: 11, fontWeight: '800' },
 
-  transferBtn: {
-    marginTop: 14,
+  transfersSection: { marginTop: 16 },
+  transfersTitle: { fontSize: 16, fontWeight: '900', color: '#111827', marginBottom: 10 },
+  transfersLockedBox: {
+    backgroundColor: '#fffbeb',
     borderWidth: 1,
-    borderColor: '#ef4444',
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-    backgroundColor: '#fff',
+    borderColor: '#f59e0b',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 12,
   },
-  transferBtnText: { color: '#b91c1c', fontWeight: '700' },
+  transfersLockedText: { color: '#92400e', fontWeight: '800', textAlign: 'center' },
+  transferCard: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 14,
+    marginBottom: 12,
+  },
+  transferCardTitle: { fontSize: 15, fontWeight: '900' },
+  transferCardDesc: { marginTop: 6, color: '#6b7280', fontWeight: '600', lineHeight: 18 },
+  selector: {
+    marginTop: 12,
+    backgroundColor: '#f9fafb',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    padding: 12,
+  },
+  selectorLabel: { color: '#6b7280', fontSize: 12, fontWeight: '800' },
+  selectorValue: { marginTop: 4, color: '#111827', fontWeight: '900' },
+  reasonInput: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 12,
+    minHeight: 54,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  btnPres: {
+    marginTop: 12,
+    backgroundColor: '#7c3aed',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  btnPresText: { color: '#fff', fontWeight: '900' },
+  btnTres: {
+    marginTop: 12,
+    backgroundColor: '#1d4ed8',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  btnTresText: { color: '#fff', fontWeight: '900' },
 
   floatingBtn: {
     position: 'absolute',

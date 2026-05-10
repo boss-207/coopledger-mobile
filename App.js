@@ -1,14 +1,19 @@
 import React, { useEffect } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as NavigationBar from 'expo-navigation-bar';
 import { useAuth } from './src/hooks/useAuth';
+import { useNotifications } from './src/hooks/useNotifications';
 import LoginScreen from './src/screens/LoginScreen';
 import AppNavigator from './src/navigation/AppNavigator';
 
+const navigationRef = createNavigationContainerRef();
+
 export default function App() {
   const { user, userData, loading } = useAuth();
+
+  useNotifications({ userData, navigationRef });
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
@@ -39,7 +44,7 @@ export default function App() {
       ) : !user ? (
         <LoginScreen />
       ) : (
-        <NavigationContainer>
+        <NavigationContainer ref={navigationRef}>
           <AppNavigator userData={userData} />
         </NavigationContainer>
       )}

@@ -6,11 +6,22 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useVotes, useVoter } from '../hooks/useBlockchain';
 import { polygonscanTxUrl } from '../config/blockchain';
+import { collection, doc, onSnapshot, query, runTransaction, setDoc, where, serverTimestamp } from 'firebase/firestore';
+import { db } from '../config/firebase';
+import { updateRolesAfterVote } from '../utils/updateRoles';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
+const VIOLET = '#7c3aed';
+const BLUE = '#1d4ed8';
 
 const VOTES_LOCAUX_KEY = '@coopledger_mes_votes';
+
+function getInitiales(nom) {
+  if (!nom) return '?';
+  const parts = nom.trim().split(/\s+/).slice(0, 2);
+  return parts.map((p) => p.charAt(0).toUpperCase()).join('');
+}
 
 function Timer({ dateExpiration }) {
   const [remaining, setRemaining] = useState('');
@@ -36,12 +47,43 @@ export default function VoteScreen({ userData }) {
   const [votingId, setVotingId] = useState(null);
   const [mesVotes, setMesVotes] = useState({});
 
+  const [govVotes, setGovVotes] = useState([]);
+  const [govLoading, setGovLoading] = useState(true);
+  const [govVotingId, setGovVotingId] = useState(null);
+
   // Charger votes locaux (UX uniquement — la règle réelle est on-chain)
   useEffect(() => {
     AsyncStorage.getItem(VOTES_LOCAUX_KEY).then(v => {
       if (v) setMesVotes(JSON.parse(v));
     });
   }, []);
+
+  // Votes Firestore (gouvernance : transferts)
+  useEffect(() => {
+    const coopId = userData?.cooperativeId || 'broukou';
+    const q = query(
+      collection(db, 'votes'),
+      where('cooperativeId', '==', coopId),
+      where('statut', '==', 'ouvert')
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .filter((v) => v.type === 'transfert_presidence' || v.type === 'transfert_tresorier')
+          .sort((a, b) => {
+            const da = a?.dateCreation?.toDate ? a.dateCreation.toDate().getTime() : new Date(a?.dateCreation || 0).getTime();
+            const dbb = b?.dateCreation?.toDate ? b.dateCreation.toDate().getTime() : new Date(b?.dateCreation || 0).getTime();
+            return dbb - da;
+          });
+        setGovVotes(list);
+        setGovLoading(false);
+      },
+      () => setGovLoading(false)
+    );
+    return () => unsub();
+  }, [userData?.cooperativeId]);
 
   async function enregistrerVoteLocal(transactionId, choix) {
     const updated = { ...mesVotes, [transactionId]: choix };
@@ -79,6 +121,72 @@ export default function VoteScreen({ userData }) {
     setVotingId(null);
   }
 
+  function canVoteOnGovernance(vote) {
+    if (!vote) return { ok: false, reason: 'Vote introuvable.' };
+    if (vote.statut !== 'ouvert') return { ok: false, reason: 'Ce vote est terminé.' };
+    const uid = userData?.uid;
+    if (!uid) return { ok: false, reason: 'Connexion requise.' };
+
+    // Règles spéciales :
+    if (vote.type === 'transfert_presidence' && uid === vote.ancienRoleUid) {
+      return { ok: false, reason: 'Vous ne pouvez pas voter sur votre propre transfert de rôle.' };
+    }
+    if (vote.type === 'transfert_tresorier' && uid === vote.ancienRoleUid) {
+      return { ok: false, reason: 'Vous ne pouvez pas voter sur votre propre transfert de rôle.' };
+    }
+
+    return { ok: true };
+  }
+
+  async function handleVoterGouvernance(voteId, choix) {
+    if (!userData?.uid) return Alert.alert('Erreur', 'Tu dois être connecté.');
+    const vote = govVotes.find((v) => v.id === voteId);
+    const check = canVoteOnGovernance(vote);
+    if (!check.ok) return Alert.alert('Information', check.reason);
+
+    setGovVotingId(voteId);
+    try {
+      const voteRef = doc(db, 'votes', voteId);
+      const bulletinId = `${voteId}_${userData.uid}`;
+      const bulletinRef = doc(db, 'bulletins_vote', bulletinId);
+
+      await runTransaction(db, async (tx) => {
+        const snapVote = await tx.get(voteRef);
+        if (!snapVote.exists()) throw new Error('Vote introuvable.');
+        const cur = snapVote.data();
+        if (cur.statut !== 'ouvert') throw new Error('Ce vote est déjà terminé.');
+
+        const snapBulletin = await tx.get(bulletinRef);
+        if (snapBulletin.exists()) throw new Error('Tu as déjà voté sur ce transfert.');
+
+        const incOui = choix === 'oui' ? 1 : 0;
+        const incNon = choix === 'non' ? 1 : 0;
+
+        tx.update(voteRef, {
+          votesOui: Number(cur.votesOui || 0) + incOui,
+          votesNon: Number(cur.votesNon || 0) + incNon,
+          lastVoteAt: serverTimestamp(),
+        });
+        tx.set(bulletinRef, {
+          voteId,
+          userId: userData.uid,
+          choix,
+          createdAt: serverTimestamp(),
+          type: cur.type || null,
+          cooperativeId: cur.cooperativeId || null,
+        });
+      });
+
+      // Vérifie si on doit clôturer le vote + appliquer les rôles (quorum / expiration)
+      await updateRolesAfterVote(doc(db, 'votes', voteId));
+
+      Alert.alert('Vote enregistré', `Ton vote "${choix.toUpperCase()}" a été enregistré.`);
+    } catch (e) {
+      Alert.alert('Erreur', e?.message || 'Impossible de voter. Réessaie.');
+    }
+    setGovVotingId(null);
+  }
+
   if (loading) return (
     <View style={styles.centered}>
       <ActivityIndicator size="large" color={GREEN} />
@@ -91,9 +199,128 @@ export default function VoteScreen({ userData }) {
 
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Gouvernance Active</Text>
-        <Text style={styles.headerSub}>Votes en cours · Blockchain Polygon Amoy</Text>
+        <Text style={styles.headerSub}>Votes de gouvernance (Firestore) + votes financiers (Polygon)</Text>
       </View>
 
+      {/* VOTES DE GOUVERNANCE (TRANSFERTS) */}
+      {govLoading ? (
+        <View style={styles.govLoadingBox}>
+          <ActivityIndicator color={GREEN} />
+          <Text style={styles.govLoadingText}>Chargement des votes de gouvernance...</Text>
+        </View>
+      ) : govVotes.length > 0 ? (
+        govVotes.map((v) => {
+          const isPres = v.type === 'transfert_presidence';
+          const accent = isPres ? VIOLET : BLUE;
+          const bg = isPres ? '#f5f3ff' : '#eff6ff';
+          const badge = isPres ? '🛡️ Vote de Gouvernance' : '🏦 Vote de Gouvernance';
+          const rolePropose = isPres ? 'Président' : 'Trésorier';
+          const isVoting = govVotingId === v.id;
+          const totalVotes = Number(v.votesOui || 0) + Number(v.votesNon || 0);
+          const totalMembres = Number(v.totalMembres || 0);
+          const pctOui = totalMembres > 0 ? Math.round((Number(v.votesOui || 0) / totalMembres) * 100) : 0;
+          const pctNon = totalMembres > 0 ? Math.round((Number(v.votesNon || 0) / totalMembres) * 100) : 0;
+          const participation = totalMembres > 0 ? Math.round((totalVotes / totalMembres) * 100) : 0;
+          const cantVote = !canVoteOnGovernance(v).ok;
+
+          const exp = v?.dateExpiration?.toDate ? v.dateExpiration.toDate() : new Date(v?.dateExpiration || Date.now());
+
+          return (
+            <View key={v.id} style={[styles.govCard, { backgroundColor: bg, borderColor: `${accent}33` }]}>
+              <View style={styles.govHeaderRow}>
+                <View style={[styles.govBadge, { backgroundColor: `${accent}22`, borderColor: `${accent}55` }]}>
+                  <Text style={[styles.govBadgeText, { color: accent }]}>{badge}</Text>
+                </View>
+                <Text style={[styles.govTimerBig, { color: accent }]}>
+                  ⏱️ {exp instanceof Date && !Number.isNaN(exp.getTime()) ? exp.toLocaleString('fr-FR') : '—'}
+                </Text>
+              </View>
+
+              <View style={styles.govCandidateRow}>
+                <View style={[styles.govAvatar, { backgroundColor: `${accent}22` }]}>
+                  <Text style={[styles.govAvatarText, { color: accent }]}>{getInitiales(v.candidatNom)}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.govCandidateName, { color: accent }]}>{v.candidatNom || 'Candidat'}</Text>
+                  <Text style={styles.govCandidateSub}>Rôle proposé : <Text style={{ fontWeight: '900' }}>{rolePropose}</Text></Text>
+                </View>
+              </View>
+
+              {v.raisonTransfert ? (
+                <View style={[styles.govReasonBox, { borderColor: `${accent}33` }]}>
+                  <Text style={styles.govReasonTitle}>Raison (optionnelle)</Text>
+                  <Text style={styles.govReasonText}>{v.raisonTransfert}</Text>
+                </View>
+              ) : null}
+
+              <Text style={styles.govExplain}>
+                {isPres
+                  ? 'Ce vote détermine la direction de votre coopérative.'
+                  : 'Ce vote détermine la gestion financière de votre coopérative.'}
+              </Text>
+
+              <View style={styles.progressSection}>
+                <View style={styles.progressBar}>
+                  <View style={[styles.progressFill, { width: `${participation}%`, backgroundColor: accent }]} />
+                </View>
+                <Text style={styles.progressText}>
+                  {participation}% de participation · Quorum requis : {Number(v.quorumRequis || 60)}%
+                </Text>
+              </View>
+
+              <View style={styles.countersRow}>
+                <View style={[styles.counter, { backgroundColor: '#ffffffaa' }]}>
+                  <Text style={styles.counterIcon}>✅</Text>
+                  <Text style={[styles.counterNum, { color: accent }]}>{Number(v.votesOui || 0)}</Text>
+                  <Text style={styles.counterLabel}>OUI ({pctOui}%)</Text>
+                </View>
+                <View style={[styles.counter, { backgroundColor: '#ffffffaa' }]}>
+                  <Text style={styles.counterIcon}>❌</Text>
+                  <Text style={[styles.counterNum, { color: '#dc2626' }]}>{Number(v.votesNon || 0)}</Text>
+                  <Text style={styles.counterLabel}>NON ({pctNon}%)</Text>
+                </View>
+              </View>
+
+              {cantVote ? (
+                <View style={[styles.cantVoteBox, { borderColor: `${accent}55` }]}>
+                  <Text style={[styles.cantVoteText, { color: accent }]}>
+                    Vous ne pouvez pas voter sur votre propre transfert de rôle
+                  </Text>
+                </View>
+              ) : (
+                <View style={styles.voteButtons}>
+                  <TouchableOpacity
+                    style={[styles.btnOui, { backgroundColor: accent }, isVoting && { opacity: 0.6 }]}
+                    onPress={() => handleVoterGouvernance(v.id, 'oui')}
+                    disabled={!!govVotingId}
+                  >
+                    {isVoting
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : <Text style={styles.btnOuiText}>✅  Voter OUI</Text>
+                    }
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.btnNon, isVoting && { opacity: 0.6 }]}
+                    onPress={() => handleVoterGouvernance(v.id, 'non')}
+                    disabled={!!govVotingId}
+                  >
+                    {isVoting
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : <Text style={styles.btnNonText}>❌  Voter NON</Text>
+                    }
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              <Text style={[styles.govTimerHelp, { color: accent }]}>
+                Timer 24h : expire le {exp instanceof Date && !Number.isNaN(exp.getTime()) ? exp.toLocaleString('fr-FR') : '—'}
+              </Text>
+            </View>
+          );
+        })
+      ) : null}
+
+      {/* VOTES FINANCIERS (BLOCKCHAIN) */}
       {votes.length === 0 ? (
         <View style={styles.emptyCard}>
           <Text style={{ fontSize: 48, marginBottom: 12 }}>🗳️</Text>
@@ -235,6 +462,31 @@ const styles = StyleSheet.create({
   header: { padding: 20, paddingBottom: 8 },
   headerTitle: { fontSize: 24, fontWeight: '800', color: '#111827' },
   headerSub: { fontSize: 13, color: '#6b7280', marginTop: 4 },
+  govLoadingBox: { paddingHorizontal: 20, paddingTop: 8, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  govLoadingText: { color: '#6b7280', fontWeight: '600' },
+  govCard: {
+    margin: 20,
+    marginTop: 8,
+    borderRadius: 20,
+    padding: 18,
+    borderWidth: 1,
+  },
+  govHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  govBadge: { borderWidth: 1, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },
+  govBadgeText: { fontSize: 12, fontWeight: '900' },
+  govTimerBig: { fontSize: 12, fontWeight: '900' },
+  govCandidateRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 14 },
+  govAvatar: { width: 54, height: 54, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  govAvatarText: { fontSize: 18, fontWeight: '900' },
+  govCandidateName: { fontSize: 18, fontWeight: '900' },
+  govCandidateSub: { marginTop: 3, color: '#374151', fontWeight: '700', fontSize: 12 },
+  govReasonBox: { marginTop: 12, padding: 12, borderRadius: 14, backgroundColor: '#fff', borderWidth: 1 },
+  govReasonTitle: { fontSize: 12, color: '#6b7280', fontWeight: '800' },
+  govReasonText: { marginTop: 6, color: '#111827', fontWeight: '700', lineHeight: 18 },
+  govExplain: { marginTop: 12, color: '#111827', fontWeight: '700' },
+  govTimerHelp: { marginTop: 10, fontSize: 12, fontWeight: '800' },
+  cantVoteBox: { marginTop: 8, padding: 12, borderRadius: 14, backgroundColor: '#fff', borderWidth: 1, alignItems: 'center' },
+  cantVoteText: { fontWeight: '900', textAlign: 'center' },
   emptyCard: {
     margin: 20, backgroundColor: '#fff', borderRadius: 20, padding: 40,
     alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, elevation: 3,

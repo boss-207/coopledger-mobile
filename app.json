@@ -1,42 +1,76 @@
 {
   "expo": {
-    "name": "coopledger-mobile",
+    "name": "CoopLedger",
     "slug": "coopledger-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#14532d"
     },
+
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": false,
+      "bundleIdentifier": "com.coopledger.app",
+      "googleServicesFile": "./GoogleService-Info.plist"
     },
+
+    "android": {
+      "package": "com.coopledger.app",
+      "googleServicesFile": "./google-services.json",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#14532d"
+      },
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "NOTIFICATIONS",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+
     "androidNavigationBar": {
       "backgroundColor": "#ffffff",
       "barStyle": "dark-content"
     },
-    "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
-      },
-      "edgeToEdgeEnabled": true
-    },
+
     "web": {
       "favicon": "./assets/favicon.png"
     },
+
     "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#15803d",
+          "defaultChannel": "votes",
+          "androidMode": "default",
+          "androidCollapsedTitle": "CoopLedger"
+        }
+      ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "CoopLedger accède à tes photos pour joindre un justificatif (reçu).",
+          "photosPermission": "CoopLedger accède à tes photos pour joindre un justificatif.",
           "cameraPermission": "CoopLedger utilise la caméra pour photographier un justificatif."
         }
       ]
-    ]
+    ],
+
+    "extra": {
+      "eas": {
+        "projectId": "coopledger-mobile"
+      }
+    }
   }
 }

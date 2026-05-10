@@ -7,9 +7,11 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Share,
+  Alert,
 } from 'react-native';
 import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { db } from '../config/firebase';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
@@ -151,6 +153,7 @@ export default function RapportScreen() {
   const [transactions, setTransactions] = useState([]);
   const [votes, setVotes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [sendingEmail, setSendingEmail] = useState(false);
 
   useEffect(() => {
     let txLoaded = false;
@@ -281,6 +284,25 @@ Source: CoopLedger (registre Firestore + preuves blockchain des hash de transact
 Destinataires: IFAD, Banques partenaires, Ministère de l'Agriculture.`;
 
     await Share.share({ message });
+  };
+
+  const handleSendEmail = async () => {
+    if (sendingEmail) return;
+    setSendingEmail(true);
+    try {
+      const { start } = getMonthRange(selectedMonthMode);
+      const mois = start.getMonth() + 1; // 1..12
+      const annee = start.getFullYear();
+
+      const functions = getFunctions(undefined, 'europe-west1');
+      const envoyer = httpsCallable(functions, 'envoyerRapportMensuel');
+      await envoyer({ mois, annee });
+
+      Alert.alert('Succès', 'Rapport envoyé à tous les membres ✅');
+    } catch (e) {
+      Alert.alert('Erreur', e?.message || 'Envoi impossible. Réessaie.');
+    }
+    setSendingEmail(false);
   };
 
   if (loading) {
@@ -416,6 +438,18 @@ Destinataires: IFAD, Banques partenaires, Ministère de l'Agriculture.`;
         </Text>
       </View>
 
+      <TouchableOpacity
+        style={[styles.emailButton, sendingEmail && { opacity: 0.7 }]}
+        onPress={handleSendEmail}
+        disabled={sendingEmail}
+      >
+        {sendingEmail ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.emailButtonText}>📧 Envoyer par email</Text>
+        )}
+      </TouchableOpacity>
+
       <TouchableOpacity style={styles.shareButton} onPress={handleShare}>
         <Text style={styles.shareButtonText}>Partager le rapport mensuel</Text>
       </TouchableOpacity>
@@ -537,4 +571,18 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   shareButtonText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+
+  emailButton: {
+    marginHorizontal: 16,
+    marginTop: 14,
+    backgroundColor: GREEN_DARK,
+    borderRadius: 16,
+    paddingVertical: 16,
+    alignItems: 'center',
+    shadowColor: GREEN_DARK,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    elevation: 4,
+  },
+  emailButtonText: { color: '#fff', fontSize: 15, fontWeight: '800' },
 });
