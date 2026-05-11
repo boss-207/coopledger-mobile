@@ -8,6 +8,7 @@ import { useSendTransaction } from '../hooks/useBlockchain';
 import { polygonscanTxUrl } from '../config/blockchain';
 import { db } from '../config/firebase';
 import { selectImage, uploadJustificatif } from '../utils/uploadImage';
+import { getNombreMembres } from '../utils/getMembresActifs';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
@@ -52,6 +53,14 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
     }
 
     try {
+      const coopId = userData?.cooperativeId || 'broukou';
+      let totalMembresActifs = 0;
+      try {
+        totalMembresActifs = await getNombreMembres(coopId);
+      } catch {
+        totalMembresActifs = 0;
+      }
+
       const titreComplet = form.fournisseur.trim()
         ? `${form.titre.trim()} — ${form.fournisseur.trim()}`
         : form.titre.trim();
@@ -117,7 +126,7 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
       }
 
       const baseMsg = voteDeclenche
-        ? `La transaction dépasse 500 000 FCFA.\n\nUn vote a été déclenché automatiquement.\n\nHash : ${hashCourt}`
+        ? `La transaction dépasse 500 000 FCFA.\n\nUn vote a été déclenché automatiquement sur Polygon (total membres figé à ce moment sur la chaîne).\n\nRéférence coopérative : ${totalMembresActifs} membre(s) actif(s) dans Firestore.\n\nHash : ${hashCourt}`
         : `Transaction confirmée sur Polygon Amoy.\n\nHash : ${hashCourt}`;
 
       const suffix = justificatifOk ? '\n\n📎 Justificatif ajouté ✅' : '';

@@ -14,7 +14,9 @@ import {
 } from 'react-native';
 import { signOut } from 'firebase/auth';
 import { auth, db } from '../config/firebase';
-import { doc, updateDoc } from 'firebase/firestore';
+import { collection, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
+import { useVotes } from '../hooks/useBlockchain';
+import { quitterCooperative } from '../utils/getMembresActifs';
 import {
   getWalletAddress,
   importWalletFromPrivateKey,
@@ -26,7 +28,18 @@ import { CONTRACT_ADDRESS } from '../config/contract';
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
 
+const COOP_NOM_AFFICHE = 'CTA de Broukou';
+
+/** Vote Firestore ouvert où ce membre est censé pouvoir participer (hors cas « son propre transfert »). */
+function membreDoitVoterSurCeVote(uid, vote) {
+  if (!vote || vote.statut !== 'ouvert') return false;
+  if (vote.type === 'transfert_presidence' && uid === vote.ancienRoleUid) return false;
+  if (vote.type === 'transfert_tresorier' && uid === vote.ancienRoleUid) return false;
+  return true;
+}
+
 export default function ProfileScreen({ userData }) {
+  const { votes: votesPolygonFinanciers } = useVotes();
   const roleColors = { president: '#7c3aed', tresorier: '#2563eb', membre: GREEN };
   const roleLabels = { president: '🛡️ Président', tresorier: '🏦 Trésorier', membre: '👤 Membre' };
   const roleColor = roleColors[userData?.role] || GREEN;
@@ -38,8 +51,33 @@ export default function ProfileScreen({ userData }) {
 
   const [telephoneInput, setTelephoneInput] = useState('');
   const [telephoneSaveLoading, setTelephoneSaveLoading] = useState(false);
+  const [bloqueParVoteFirestore, setBloqueParVoteFirestore] = useState(false);
+  const [quitterLoading, setQuitterLoading] = useState(false);
 
   const contractOk = isContractConfigured();
+  const coopId = userData?.cooperativeId || 'broukou';
+
+  useEffect(() => {
+    if (!userData?.uid) {
+      setBloqueParVoteFirestore(false);
+      return;
+    }
+    const openVotesQ = query(
+      collection(db, 'votes'),
+      where('cooperativeId', '==', coopId),
+      where('statut', '==', 'ouvert')
+    );
+    const unsub = onSnapshot(openVotesQ, (snap) => {
+      const uid = userData.uid;
+      let blocked = false;
+      snap.docs.forEach((d) => {
+        const v = d.data();
+        if (membreDoitVoterSurCeVote(uid, { ...v, statut: 'ouvert' })) blocked = true;
+      });
+      setBloqueParVoteFirestore(blocked);
+    }, () => setBloqueParVoteFirestore(false));
+    return () => unsub();
+  }, [userData?.uid, coopId]);
 
   useEffect(() => {
     getWalletAddress()
@@ -98,6 +136,81 @@ export default function ProfileScreen({ userData }) {
       Alert.alert('Erreur', e.message || 'Sauvegarde impossible.');
     }
     setTelephoneSaveLoading(false);
+  }
+
+  const peutAfficherQuitterCoop =
+    userData?.role !== 'president' &&
+    userData?.role !== 'tresorier';
+
+  function handleQuitterCooperative() {
+    if (userData?.role === 'president') {
+      Alert.alert(
+        'Départ impossible',
+        'Le président ne peut pas quitter. Transférez d’abord la présidence.'
+      );
+      return;
+    }
+    if (userData?.role === 'tresorier') {
+      Alert.alert(
+        'Départ impossible',
+        'Le trésorier ne peut pas quitter. Le président doit d’abord nommer un nouveau trésorier.'
+      );
+      return;
+    }
+    const doitPolygon = Array.isArray(votesPolygonFinanciers) && votesPolygonFinanciers.length > 0;
+    if (doitPolygon || bloqueParVoteFirestore) {
+      Alert.alert(
+        'Vote en cours',
+        'Vous ne pouvez pas quitter pendant un vote en cours.'
+      );
+      return;
+    }
+
+    const uid = auth.currentUser?.uid;
+    const nom = userData?.nom || 'Membre';
+    if (!uid) {
+      Alert.alert('Erreur', 'Tu dois être connecté.');
+      return;
+    }
+
+    Alert.alert(
+      'Quitter la coopérative',
+      `Êtes-vous sûr de vouloir quitter la coopérative ${COOP_NOM_AFFICHE} ? Vous perdrez accès à l’application.`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Continuer',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Dernière confirmation',
+              'Cette action est définitive. Seul le président pourra vous réintégrer. Confirmer le départ ?',
+              [
+                { text: 'Annuler', style: 'cancel' },
+                {
+                  text: 'Confirmer le départ',
+                  style: 'destructive',
+                  onPress: async () => {
+                    setQuitterLoading(true);
+                    try {
+                      await quitterCooperative(uid);
+                      await signOut(auth);
+                      Alert.alert(
+                        'Au revoir',
+                        `Vous avez quitté la coopérative. Au revoir ${nom} 👋`
+                      );
+                    } catch (e) {
+                      Alert.alert('Erreur', e?.message || 'Impossible de finaliser le départ.');
+                    }
+                    setQuitterLoading(false);
+                  },
+                },
+              ]
+            );
+          },
+        },
+      ]
+    );
   }
 
   function handleDeconnexion() {
@@ -247,7 +360,7 @@ export default function ProfileScreen({ userData }) {
       {/* INFOS COOPÉRATIVE */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>🌱 Ma Coopérative</Text>
-        <InfoRow icon="🏛️" label="Nom" value="CTA de Broukou" />
+        <InfoRow icon="🏛️" label="Nom" value={COOP_NOM_AFFICHE} />
         <InfoRow icon="📍" label="Localisation" value="Préfecture de Doufelgou, Région de la Kara" />
         <InfoRow icon="⛓️" label="Blockchain" value="Polygon Amoy (testnet)" />
       </View>
@@ -297,6 +410,20 @@ export default function ProfileScreen({ userData }) {
         <InfoRow icon="🌐" label="RPC" value="rpc-amoy.polygon.technology" dark />
         <InfoRow icon="🆔" label="Chain ID" value="80002" dark />
       </View>
+
+      {peutAfficherQuitterCoop ? (
+        <TouchableOpacity
+          style={[styles.quitCoopBtn, quitterLoading && { opacity: 0.65 }]}
+          onPress={handleQuitterCooperative}
+          disabled={quitterLoading}
+        >
+          {quitterLoading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.quitCoopText}>🚪 Quitter la coopérative</Text>
+          )}
+        </TouchableOpacity>
+      ) : null}
 
       <TouchableOpacity style={styles.deconnexionBtn} onPress={handleDeconnexion}>
         <Text style={styles.deconnexionText}>🚪  Se déconnecter</Text>
@@ -409,6 +536,16 @@ const styles = StyleSheet.create({
   modalBtnText: { color: '#fff', fontWeight: '800' },
   modalCancel: { marginTop: 12, alignItems: 'center', padding: 8 },
   modalCancelText: { color: '#6b7280', fontWeight: '600' },
+
+  quitCoopBtn: {
+    marginHorizontal: 16,
+    marginBottom: 0,
+    backgroundColor: '#b91c1c',
+    borderRadius: 16,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  quitCoopText: { fontSize: 16, fontWeight: '800', color: '#fff' },
 
   deconnexionBtn: {
     margin: 16, backgroundColor: '#fff', borderWidth: 2,

@@ -135,7 +135,9 @@ async function getActiveMembersWithToken({ coopId, excludeUid }) {
     const u = d.data();
     const uid = u.uid || d.id;
     if (excludeUid && uid === excludeUid) continue;
-    if (u.statut === "inactif") continue;
+    const st = u.statut;
+    if (st === "inactif" || st === "exclu") continue;
+    if (st && st !== "actif") continue;
     if (!u.fcmToken || typeof u.fcmToken !== "string") continue;
     members.push({
       uid,
@@ -1126,5 +1128,116 @@ exports.notifierNouvelleTransaction = onDocumentCreated(
     for (const c of chunkArray(tokens, 500)) {
       await sendMulticastWithRetry({ ...base, tokens: c }, tokenToUserRef);
     }
+  }
+);
+
+/** Broadcast FCM — création d’une entrée historique_exclusions (exclusion président). */
+exports.notifierExclusionMembre = onDocumentCreated(
+  { document: "historique_exclusions/{id}" },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+
+    const row = snap.data() || {};
+    const coopId = row.cooperativeId || COOP_ID_PUSH;
+    const nom = row.membreNom || "Un membre";
+
+    const members = await getActiveMembersWithToken({
+      coopId,
+      excludeUid: null,
+    });
+
+    if (members.length === 0) {
+      logger.info("FCM exclusion: aucun destinataire", { id: event.params.id });
+      return;
+    }
+
+    const tokenToUserRef = new Map(members.map((m) => [m.token, m.ref]));
+    const tokens = members.map((m) => m.token);
+
+    const base = {
+      notification: {
+        title: "👤 Membre exclu",
+        body: `${nom} a été exclu de la coopérative.`,
+      },
+      data: {
+        type: "MEMBER_EXCLUDED",
+        cooperativeId: String(coopId),
+        membreNom: String(nom),
+      },
+      android: {
+        priority: "high",
+        notification: {
+          channelId: "votes",
+          priority: "max",
+          defaultSound: true,
+          defaultVibrateTimings: true,
+          color: "#15803d",
+          icon: "notification_icon",
+        },
+      },
+      apns: {
+        payload: { aps: { sound: "default", badge: 1, contentAvailable: true } },
+      },
+    };
+
+    for (const c of chunkArray(tokens, 500)) {
+      await sendMulticastWithRetry({ ...base, tokens: c }, tokenToUserRef);
+    }
+  }
+);
+
+/** Notification ciblée — création reintegration_notifications par l’app. */
+exports.notifierReintegrationMembre = onDocumentCreated(
+  { document: "reintegration_notifications/{id}" },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+
+    const row = snap.data() || {};
+    const targetUid = row.targetUid;
+    if (!targetUid) return;
+
+    const userRef = db.doc(`users/${targetUid}`);
+    const userSnap = await userRef.get();
+    if (!userSnap.exists) return;
+
+    const u = userSnap.data() || {};
+    const token = typeof u.fcmToken === "string" ? u.fcmToken.trim() : "";
+    if (!token) {
+      logger.info("FCM réintégration: pas de token", { targetUid });
+      return;
+    }
+
+    const coopName = row.cooperativeNom || COOP_DEFAULT_NAME;
+
+    const base = {
+      notification: {
+        title: "🎉 Réintégration",
+        body: `Vous avez été réintégré dans la coopérative ${coopName} !`,
+      },
+      data: {
+        type: "MEMBER_REINTEGRATED",
+        cooperativeId: String(row.cooperativeId || COOP_ID_PUSH),
+      },
+      android: {
+        priority: "high",
+        notification: {
+          channelId: "votes",
+          priority: "max",
+          defaultSound: true,
+          defaultVibrateTimings: true,
+          color: "#15803d",
+          icon: "notification_icon",
+        },
+      },
+      apns: {
+        payload: { aps: { sound: "default", badge: 1, contentAvailable: true } },
+      },
+      tokens: [token],
+    };
+
+    const tokenToUserRef = new Map([[token, userRef]]);
+    await sendMulticastWithRetry(base, tokenToUserRef);
   }
 );

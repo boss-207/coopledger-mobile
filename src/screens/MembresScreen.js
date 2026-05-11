@@ -20,11 +20,16 @@ import {
   updateDoc,
   where,
   writeBatch,
-  getDocs,
   setDoc,
   Timestamp,
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
+import { useVotes } from '../hooks/useBlockchain';
+import {
+  getNombreMembres,
+  exclureMembre,
+  reintegrerMembre,
+} from '../utils/getMembresActifs';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
@@ -51,9 +56,32 @@ function getInitiales(nom) {
   return parts.map((p) => p.charAt(0).toUpperCase()).join('');
 }
 
-function MemberRow({ member, voteCount, isPresident, onChangeRole, onRemove, canManage }) {
+function statutMembreLabel(statut) {
+  if (statut === 'exclu') return 'Exclu';
+  if (statut === 'inactif') return 'Inactif';
+  return 'Actif';
+}
+
+function dotCouleurStatut(statut) {
+  if (statut === 'exclu') return '#dc2626';
+  if (statut === 'inactif') return '#6b7280';
+  return '#22c55e';
+}
+
+function MemberRow({
+  member,
+  voteCount,
+  isPresidentRow,
+  onChangeRole,
+  canManage,
+  onPressExclure,
+  onPressReintegrer,
+  showExclure,
+  showReintegrer,
+}) {
   const color = ROLE_COLORS[member.role] || GREEN;
-  const statutActif = member.statut !== 'inactif';
+  const st = member.statut;
+  const labelStatut = statutMembreLabel(st);
 
   return (
     <View style={styles.memberCard}>
@@ -68,35 +96,59 @@ function MemberRow({ member, voteCount, isPresident, onChangeRole, onRemove, can
         </View>
         <Text style={styles.metaText}>Inscrit le {formatDate(member.dateInscription)}</Text>
         <View style={styles.metaRow}>
-          <View style={[styles.dot, { backgroundColor: statutActif ? '#22c55e' : '#9ca3af' }]} />
-          <Text style={styles.metaText}>{statutActif ? 'Actif' : 'Inactif'}</Text>
+          <View style={[styles.dot, { backgroundColor: dotCouleurStatut(st) }]} />
+          <Text style={styles.metaText}>
+            {labelStatut}
+            {st === 'actif' || !st ? ' ✅' : st === 'inactif' ? ' ⚫' : ' ❌'}
+          </Text>
           <Text style={styles.voteCountText}>Votes: {voteCount}</Text>
         </View>
       </View>
 
-      {canManage && !isPresident && (
+      {canManage && !isPresidentRow ? (
         <View style={styles.actionsCol}>
           <TouchableOpacity style={styles.editBtn} onPress={() => onChangeRole(member)}>
             <Text style={styles.editBtnText}>✏️ Rôle</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.removeBtn} onPress={() => onRemove(member)}>
-            <Text style={styles.removeBtnText}>🚫 Retirer</Text>
-          </TouchableOpacity>
+          {showExclure ? (
+            <TouchableOpacity style={styles.removeBtn} onPress={() => onPressExclure(member)}>
+              <Text style={styles.removeBtnText}>🚫 Exclure</Text>
+            </TouchableOpacity>
+          ) : null}
+          {showReintegrer ? (
+            <TouchableOpacity style={styles.reintegreBtn} onPress={() => onPressReintegrer(member)}>
+              <Text style={styles.reintegreBtnText}>✅ Réintégrer</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
-      )}
+      ) : null}
     </View>
   );
 }
 
+function membreDoitVoterSurCeVote(uid, vote) {
+  if (!vote || vote.statut !== 'ouvert') return false;
+  if (vote.type === 'transfert_presidence' && uid === vote.ancienRoleUid) return false;
+  if (vote.type === 'transfert_tresorier' && uid === vote.ancienRoleUid) return false;
+  return true;
+}
+
 export default function MembresScreen({ userData }) {
+  const { votes: votesPolygonOuverts } = useVotes();
   const [users, setUsers] = useState([]);
   const [votesByUser, setVotesByUser] = useState({});
   const [openVotesCount, setOpenVotesCount] = useState(0);
+  const [openVotesList, setOpenVotesList] = useState([]);
   const [openTransferCount, setOpenTransferCount] = useState(0);
   const [openFinancialCount, setOpenFinancialCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [memberFilter, setMemberFilter] = useState('actifs');
+
+  const [excludeModalVisible, setExcludeModalVisible] = useState(false);
+  const [excludeTarget, setExcludeTarget] = useState(null);
+  const [excludeRaison, setExcludeRaison] = useState('');
 
   const [addModalVisible, setAddModalVisible] = useState(false);
   const [roleModalVisible, setRoleModalVisible] = useState(false);
@@ -156,6 +208,9 @@ export default function MembresScreen({ userData }) {
       openVotesQ,
       (snap) => {
         setOpenVotesCount(snap.size);
+        setOpenVotesList(
+          snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+        );
         let transfer = 0;
         let financial = 0;
         snap.docs.forEach((d) => {
@@ -185,10 +240,37 @@ export default function MembresScreen({ userData }) {
     });
   }, [users]);
 
+  /** Seuls statut « actif » (ou profil sans statut = ancien script) comptent pour quorum / transferts. */
   const activeMembers = useMemo(
-    () => sortedMembers.filter((m) => m.statut !== 'inactif'),
+    () =>
+      sortedMembers.filter((m) => {
+        const s = m.statut;
+        if (s === 'inactif' || s === 'exclu') return false;
+        return true;
+      }),
     [sortedMembers]
   );
+
+  const displayedMembers = useMemo(() => {
+    return sortedMembers.filter((m) => {
+      const s = m.statut;
+      if (memberFilter === 'tous') return true;
+      if (memberFilter === 'actifs') return s === 'actif' || s === undefined || s === null;
+      if (memberFilter === 'inactifs') return s === 'inactif';
+      if (memberFilter === 'exclus') return s === 'exclu';
+      return true;
+    });
+  }, [sortedMembers, memberFilter]);
+
+  const exclusionVoteEnCoursPour = useMemo(() => {
+    return (memberUid) => {
+      if (votesPolygonOuverts?.length > 0) return true;
+      for (const v of openVotesList) {
+        if (membreDoitVoterSurCeVote(memberUid, v)) return true;
+      }
+      return false;
+    };
+  }, [votesPolygonOuverts, openVotesList]);
 
   const participationRate = useMemo(() => {
     if (activeMembers.length === 0) return 0;
@@ -284,38 +366,101 @@ export default function MembresScreen({ userData }) {
     }
   }
 
-  function onPressRemove(member) {
+  function ouvrirExclusion(member) {
     if (member.role === 'president') {
-      Alert.alert('Action impossible', 'Impossible de retirer le président.');
+      Alert.alert('Action impossible', 'Impossible d’exclure le président.');
       return;
     }
-    if (member.id === userData?.uid) {
-      Alert.alert('Action impossible', 'Tu ne peux pas te retirer toi-même.');
-      return;
-    }
-    if (openVotesCount > 0) {
+    if (member.role === 'tresorier') {
       Alert.alert(
         'Action impossible',
-        'Impossible de retirer un membre pendant un vote en cours.'
+        'Nommez d’abord un nouveau trésorier avant d’exclure l’actuel.'
       );
       return;
     }
+    if (member.id === userData?.uid) {
+      Alert.alert('Action impossible', 'Tu ne peux pas t’exclure toi-même depuis cette liste.');
+      return;
+    }
+    if (exclusionVoteEnCoursPour(member.id)) {
+      Alert.alert(
+        'Vote en cours',
+        'Impossible d’exclure ce membre pendant un vote en cours auquel il doit participer.'
+      );
+      return;
+    }
+    setExcludeRaison('');
+    setExcludeTarget(member);
+    setExcludeModalVisible(true);
+  }
 
+  function confirmerExclusionModal() {
+    const raison = excludeRaison.trim();
+    if (!excludeTarget || !raison) {
+      Alert.alert('Champ requis', 'Indiquez la raison de l’exclusion.');
+      return;
+    }
+    const nom = excludeTarget.nom || 'Membre';
     Alert.alert(
-      'Confirmation',
-      `Retirer ${member.nom} de la coopérative ?`,
+      'Confirmation définitive',
+      `Exclure définitivement ${nom} de la coopérative ?\n\nRaison : ${raison}\n\nCette action est enregistrée dans l’historique.`,
       [
         { text: 'Annuler', style: 'cancel' },
         {
-          text: 'Retirer',
+          text: 'Exclure',
           style: 'destructive',
+          onPress: async () => {
+            setExcludeModalVisible(false);
+            setActionLoading(true);
+            const cible = excludeTarget;
+            try {
+              const presidentNom = userData?.nom || 'Président';
+              await exclureMembre(cible.id, raison, presidentNom);
+              await addDoc(collection(db, 'historique_exclusions'), {
+                membreUid: cible.id,
+                membreNom: nom,
+                excluParUid: userData?.uid || null,
+                excluParNom: presidentNom,
+                raison,
+                date: Timestamp.now(),
+                cooperativeId: coopId,
+              });
+              setExcludeTarget(null);
+              setExcludeRaison('');
+              Alert.alert('Succès', `${nom} a été exclu de la coopérative.`);
+            } catch (e) {
+              Alert.alert('Erreur', e?.message || 'Exclusion impossible.');
+            } finally {
+              setActionLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  function handleReintegrer(member) {
+    Alert.alert(
+      'Réintégration',
+      `Réintégrer ${member.nom || 'ce membre'} dans la coopérative ?`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Réintégrer',
           onPress: async () => {
             setActionLoading(true);
             try {
-              await updateDoc(doc(db, 'users', member.id), { statut: 'inactif' });
-              Alert.alert('Succès', `${member.nom} a été marqué inactif.`);
-            } catch {
-              Alert.alert('Erreur', 'Impossible de retirer ce membre.');
+              await reintegrerMembre(member.id);
+              await addDoc(collection(db, 'reintegration_notifications'), {
+                targetUid: member.id,
+                membreNom: member.nom || 'Membre',
+                cooperativeNom: 'CTA de Broukou',
+                cooperativeId: coopId,
+                createdAt: Timestamp.now(),
+              });
+              Alert.alert('Succès', `${member.nom || 'Le membre'} a été réintégré.`);
+            } catch (e) {
+              Alert.alert('Erreur', e?.message || 'Réintégration impossible.');
             } finally {
               setActionLoading(false);
             }
@@ -356,40 +501,10 @@ export default function MembresScreen({ userData }) {
       return;
     }
 
-    const totalMembres = activeMembers.length;
     const now = new Date();
     const expires = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
-    const voteBase = {
-      type,
-      candidatUid: candidat.id,
-      candidatNom: candidat.nom || 'Candidat',
-      creeParUid: userData?.uid,
-      creeParNom: userData?.nom || (presidentActuel?.nom || 'Président'),
-      statut: 'ouvert',
-      votesOui: 0,
-      votesNon: 0,
-      totalMembres,
-      quorumRequis: 60,
-      cooperativeId: coopId,
-      dateCreation: Timestamp.fromDate(now),
-      dateExpiration: Timestamp.fromDate(expires),
-    };
-
     if (type === 'transfert_presidence') {
-      const raison = raisonPresident.trim();
-      const payload = {
-        ...voteBase,
-        titre: `Transfert de présidence à ${candidat.nom}`,
-        description:
-          `Le président ${presidentActuel?.nom || 'actuel'} propose ${candidat.nom} comme nouveau président de la coopérative CTA de Broukou.`,
-        ancienRoleUid: presidentActuel?.id || userData?.uid,
-        ancienRoleNom: presidentActuel?.nom || userData?.nom || 'Président',
-        ancienRole: 'president',
-        nouveauRole: 'president',
-        raisonTransfert: raison || null,
-      };
-
       Alert.alert(
         'Confirmation',
         `Êtes-vous sûr de proposer ${candidat.nom} comme nouveau président ?`,
@@ -410,7 +525,35 @@ export default function MembresScreen({ userData }) {
                     onPress: async () => {
                       setActionLoading(true);
                       try {
-                        await addDoc(collection(db, 'votes'), payload);
+                        const totalMembres = await getNombreMembres(coopId);
+                        const voteBase = {
+                          type,
+                          candidatUid: candidat.id,
+                          candidatNom: candidat.nom || 'Candidat',
+                          creeParUid: userData?.uid,
+                          creeParNom: userData?.nom || (presidentActuel?.nom || 'Président'),
+                          statut: 'ouvert',
+                          votesOui: 0,
+                          votesNon: 0,
+                          totalMembres,
+                          quorumRequis: 60,
+                          cooperativeId: coopId,
+                          dateCreation: Timestamp.fromDate(now),
+                          dateExpiration: Timestamp.fromDate(expires),
+                        };
+                        const raison = raisonPresident.trim();
+                        const payloadFinal = {
+                          ...voteBase,
+                          titre: `Transfert de présidence à ${candidat.nom}`,
+                          description:
+                            `Le président ${presidentActuel?.nom || 'actuel'} propose ${candidat.nom} comme nouveau président de la coopérative CTA de Broukou.`,
+                          ancienRoleUid: presidentActuel?.id || userData?.uid,
+                          ancienRoleNom: presidentActuel?.nom || userData?.nom || 'Président',
+                          ancienRole: 'president',
+                          nouveauRole: 'president',
+                          raisonTransfert: raison || null,
+                        };
+                        await addDoc(collection(db, 'votes'), payloadFinal);
                         setCandidatePresidentId(null);
                         setRaisonPresident('');
                         Alert.alert('Succès', 'Vote de transfert de présidence créé.');
@@ -430,19 +573,6 @@ export default function MembresScreen({ userData }) {
     }
 
     if (type === 'transfert_tresorier') {
-      const raison = raisonTresorier.trim();
-      const payload = {
-        ...voteBase,
-        titre: `Changement de trésorier → ${candidat.nom}`,
-        description:
-          `Le président ${presidentActuel?.nom || 'actuel'} propose ${candidat.nom} comme nouveau trésorier de la coopérative CTA de Broukou.`,
-        ancienRoleUid: tresorierActuel?.id || null,
-        ancienRoleNom: tresorierActuel?.nom || 'Trésorier',
-        ancienRole: 'tresorier',
-        nouveauRole: 'tresorier',
-        raisonTransfert: raison || null,
-      };
-
       Alert.alert(
         'Confirmation',
         `Êtes-vous sûr de proposer ${candidat.nom} comme nouveau trésorier ?`,
@@ -463,7 +593,35 @@ export default function MembresScreen({ userData }) {
                     onPress: async () => {
                       setActionLoading(true);
                       try {
-                        await addDoc(collection(db, 'votes'), payload);
+                        const totalMembres = await getNombreMembres(coopId);
+                        const voteBase = {
+                          type,
+                          candidatUid: candidat.id,
+                          candidatNom: candidat.nom || 'Candidat',
+                          creeParUid: userData?.uid,
+                          creeParNom: userData?.nom || (presidentActuel?.nom || 'Président'),
+                          statut: 'ouvert',
+                          votesOui: 0,
+                          votesNon: 0,
+                          totalMembres,
+                          quorumRequis: 60,
+                          cooperativeId: coopId,
+                          dateCreation: Timestamp.fromDate(now),
+                          dateExpiration: Timestamp.fromDate(expires),
+                        };
+                        const raison = raisonTresorier.trim();
+                        const payloadFinal = {
+                          ...voteBase,
+                          titre: `Changement de trésorier → ${candidat.nom}`,
+                          description:
+                            `Le président ${presidentActuel?.nom || 'actuel'} propose ${candidat.nom} comme nouveau trésorier de la coopérative CTA de Broukou.`,
+                          ancienRoleUid: tresorierActuel?.id || null,
+                          ancienRoleNom: tresorierActuel?.nom || 'Trésorier',
+                          ancienRole: 'tresorier',
+                          nouveauRole: 'tresorier',
+                          raisonTransfert: raison || null,
+                        };
+                        await addDoc(collection(db, 'votes'), payloadFinal);
                         setCandidateTresorierId(null);
                         setRaisonTresorier('');
                         Alert.alert('Succès', 'Vote de changement de trésorier créé.');
@@ -496,9 +654,14 @@ export default function MembresScreen({ userData }) {
       {error ? <Text style={styles.errorBanner}>{error}</Text> : null}
 
       <FlatList
-        data={sortedMembers}
+        data={displayedMembers}
         keyExtractor={(item) => item.id}
         contentContainerStyle={{ padding: 16, paddingBottom: 140 }}
+        ListEmptyComponent={
+          <Text style={styles.emptyFilterText}>
+            Aucun membre dans cette catégorie.
+          </Text>
+        }
         ListHeaderComponent={
           <>
             <View style={styles.header}>
@@ -523,22 +686,59 @@ export default function MembresScreen({ userData }) {
               </View>
             </View>
 
+            <View style={styles.filterRow}>
+              {[
+                { key: 'actifs', label: 'Actifs' },
+                { key: 'inactifs', label: 'Inactifs' },
+                { key: 'exclus', label: 'Exclus' },
+                { key: 'tous', label: 'Tous' },
+              ].map(({ key, label }) => (
+                <TouchableOpacity
+                  key={key}
+                  style={[
+                    styles.filterChip,
+                    memberFilter === key && styles.filterChipActive,
+                  ]}
+                  onPress={() => setMemberFilter(key)}
+                >
+                  <Text
+                    style={[
+                      styles.filterChipText,
+                      memberFilter === key && styles.filterChipTextActive,
+                    ]}
+                  >
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
             <Text style={styles.sectionTitle}>Liste des membres</Text>
           </>
         }
-        renderItem={({ item }) => (
-          <MemberRow
-            member={item}
-            voteCount={votesByUser[item.uid || item.id] || 0}
-            isPresident={item.role === 'president'}
-            canManage={canManage}
-            onChangeRole={(m) => {
-              setSelectedMember(m);
-              setRoleModalVisible(true);
-            }}
-            onRemove={onPressRemove}
-          />
-        )}
+        renderItem={({ item }) => {
+          const st = item.statut;
+          const estActifListe =
+            st === 'actif' || st === undefined || st === null;
+          return (
+            <MemberRow
+              member={item}
+              voteCount={votesByUser[item.uid || item.id] || 0}
+              isPresidentRow={item.role === 'president'}
+              canManage={canManage}
+              onChangeRole={(m) => {
+                setSelectedMember(m);
+                setRoleModalVisible(true);
+              }}
+              onPressExclure={ouvrirExclusion}
+              onPressReintegrer={handleReintegrer}
+              showExclure={canManage && estActifListe && item.role !== 'president'}
+              showReintegrer={
+                canManage && (st === 'inactif' || st === 'exclu')
+              }
+            />
+          );
+        }}
         ListFooterComponent={
           canManage ? (
             <View style={styles.transfersSection}>
@@ -770,6 +970,47 @@ export default function MembresScreen({ userData }) {
         </View>
       </Modal>
 
+      <Modal visible={excludeModalVisible} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>
+              Exclure {excludeTarget?.nom ? `« ${excludeTarget.nom} »` : 'le membre'}
+            </Text>
+            <Text style={styles.excludeHint}>
+              La raison est obligatoire. Elle sera conservée dans l’historique.
+            </Text>
+            <TextInput
+              style={styles.excludeReasonInput}
+              placeholder="Raison de l’exclusion *"
+              value={excludeRaison}
+              onChangeText={setExcludeRaison}
+              multiline
+              editable={!actionLoading}
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.cancelBtn}
+                onPress={() => {
+                  if (actionLoading) return;
+                  setExcludeModalVisible(false);
+                  setExcludeTarget(null);
+                  setExcludeRaison('');
+                }}
+              >
+                <Text style={styles.cancelText}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.btnExclureConfirm, actionLoading && { opacity: 0.6 }]}
+                onPress={confirmerExclusionModal}
+                disabled={actionLoading}
+              >
+                <Text style={styles.btnExclureConfirmText}>Confirmer l’exclusion</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {actionLoading && (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator size="large" color="#fff" />
@@ -818,6 +1059,33 @@ const styles = StyleSheet.create({
   statValueSmall: { fontSize: 13, fontWeight: '800', color: '#111827' },
   sectionTitle: { fontSize: 17, fontWeight: '900', color: '#111827', marginBottom: 10 },
 
+  filterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 14,
+  },
+  filterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: '#e5e7eb',
+  },
+  filterChipActive: {
+    backgroundColor: GREEN_DARK,
+    borderColor: GREEN_DARK,
+  },
+  filterChipText: { fontSize: 12, fontWeight: '800', color: '#374151' },
+  filterChipTextActive: { color: '#fff' },
+  emptyFilterText: {
+    textAlign: 'center',
+    color: '#6b7280',
+    fontWeight: '600',
+    paddingVertical: 28,
+  },
+
   memberCard: {
     backgroundColor: '#fff',
     borderRadius: 16,
@@ -853,6 +1121,33 @@ const styles = StyleSheet.create({
   editBtnText: { color: '#1d4ed8', fontSize: 11, fontWeight: '800' },
   removeBtn: { backgroundColor: '#fef2f2', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7 },
   removeBtnText: { color: '#b91c1c', fontSize: 11, fontWeight: '800' },
+  reintegreBtn: { backgroundColor: '#ecfdf5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7 },
+  reintegreBtnText: { color: GREEN_DARK, fontSize: 11, fontWeight: '800' },
+
+  excludeHint: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginBottom: 10,
+    lineHeight: 17,
+  },
+  excludeReasonInput: {
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    padding: 12,
+    minHeight: 80,
+    fontWeight: '600',
+    color: '#111827',
+    marginBottom: 8,
+    textAlignVertical: 'top',
+  },
+  btnExclureConfirm: {
+    backgroundColor: '#b91c1c',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  btnExclureConfirmText: { color: '#fff', fontWeight: '800' },
 
   transfersSection: { marginTop: 16 },
   transfersTitle: { fontSize: 16, fontWeight: '900', color: '#111827', marginBottom: 10 },

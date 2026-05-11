@@ -9,6 +9,7 @@ import { polygonscanTxUrl } from '../config/blockchain';
 import { collection, doc, onSnapshot, query, runTransaction, setDoc, where, serverTimestamp } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { updateRolesAfterVote } from '../utils/updateRoles';
+import { quorumAtteint } from '../utils/getMembresActifs';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
@@ -21,6 +22,43 @@ function getInitiales(nom) {
   if (!nom) return '?';
   const parts = nom.trim().split(/\s+/).slice(0, 2);
   return parts.map((p) => p.charAt(0).toUpperCase()).join('');
+}
+
+function ParticipationQuorumBloc({
+  votesOui,
+  votesNon,
+  totalMembres,
+  quorumPct,
+  accentColor,
+}) {
+  const totalVotes = votesOui + votesNon;
+  const pctBar = totalMembres > 0 ? Math.min(100, Math.round((totalVotes / totalMembres) * 100)) : 0;
+  const qInfo = quorumAtteint(votesOui, totalMembres, quorumPct);
+  const manqueOui = Math.max(0, qInfo.votesNecessaires - qInfo.votesActuels);
+
+  return (
+    <View style={styles.participBox}>
+      <Text style={styles.participTitle}>Participation</Text>
+      <View style={styles.participBarTrack}>
+        <View style={[styles.participBarFill, { width: `${pctBar}%`, backgroundColor: accentColor }]} />
+      </View>
+      <Text style={styles.participLine}>
+        {totalVotes}/{totalMembres} membres ont voté
+      </Text>
+      <Text style={styles.quorumLine}>
+        Quorum requis : {qInfo.votesNecessaires} vote{qInfo.votesNecessaires > 1 ? 's' : ''} OUI ({quorumPct}%)
+      </Text>
+      <Text style={styles.voteDetailLine}>
+        Votes OUI : {votesOui}  ✅{'\n'}
+        Votes NON : {votesNon}  ❌
+      </Text>
+      <Text style={[styles.manqueLine, { color: qInfo.atteint ? GREEN : '#b45309' }]}>
+        {qInfo.atteint
+          ? `Quorum OUI atteint (${qInfo.votesActuels}/${qInfo.votesNecessaires}) ✅`
+          : `Il manque : ${manqueOui} vote${manqueOui > 1 ? 's' : ''} OUI`}
+      </Text>
+    </View>
+  );
 }
 
 function Timer({ dateExpiration }) {
@@ -126,6 +164,9 @@ export default function VoteScreen({ userData }) {
     if (vote.statut !== 'ouvert') return { ok: false, reason: 'Ce vote est terminé.' };
     const uid = userData?.uid;
     if (!uid) return { ok: false, reason: 'Connexion requise.' };
+    if (userData?.statut && userData.statut !== 'actif') {
+      return { ok: false, reason: 'Seuls les membres actifs peuvent voter.' };
+    }
 
     // Règles spéciales :
     if (vote.type === 'transfert_presidence' && uid === vote.ancienRoleUid) {
@@ -220,8 +261,8 @@ export default function VoteScreen({ userData }) {
           const totalMembres = Number(v.totalMembres || 0);
           const pctOui = totalMembres > 0 ? Math.round((Number(v.votesOui || 0) / totalMembres) * 100) : 0;
           const pctNon = totalMembres > 0 ? Math.round((Number(v.votesNon || 0) / totalMembres) * 100) : 0;
-          const participation = totalMembres > 0 ? Math.round((totalVotes / totalMembres) * 100) : 0;
-          const cantVote = !canVoteOnGovernance(v).ok;
+          const checkVote = canVoteOnGovernance(v);
+          const cantVote = !checkVote.ok;
 
           const exp = v?.dateExpiration?.toDate ? v.dateExpiration.toDate() : new Date(v?.dateExpiration || Date.now());
 
@@ -259,14 +300,13 @@ export default function VoteScreen({ userData }) {
                   : 'Ce vote détermine la gestion financière de votre coopérative.'}
               </Text>
 
-              <View style={styles.progressSection}>
-                <View style={styles.progressBar}>
-                  <View style={[styles.progressFill, { width: `${participation}%`, backgroundColor: accent }]} />
-                </View>
-                <Text style={styles.progressText}>
-                  {participation}% de participation · Quorum requis : {Number(v.quorumRequis || 60)}%
-                </Text>
-              </View>
+              <ParticipationQuorumBloc
+                votesOui={Number(v.votesOui || 0)}
+                votesNon={Number(v.votesNon || 0)}
+                totalMembres={totalMembres}
+                quorumPct={Number(v.quorumRequis || 60)}
+                accentColor={accent}
+              />
 
               <View style={styles.countersRow}>
                 <View style={[styles.counter, { backgroundColor: '#ffffffaa' }]}>
@@ -284,7 +324,7 @@ export default function VoteScreen({ userData }) {
               {cantVote ? (
                 <View style={[styles.cantVoteBox, { borderColor: `${accent}55` }]}>
                   <Text style={[styles.cantVoteText, { color: accent }]}>
-                    Vous ne pouvez pas voter sur votre propre transfert de rôle
+                    {checkVote.reason || 'Vous ne pouvez pas voter sur ce transfert.'}
                   </Text>
                 </View>
               ) : (
@@ -333,8 +373,6 @@ export default function VoteScreen({ userData }) {
           const total = vote.votesOui + vote.votesNon;
           const pctOui = total > 0 ? Math.round(vote.votesOui / total * 100) : 0;
           const pctNon = total > 0 ? Math.round(vote.votesNon / total * 100) : 0;
-          const participation = vote.totalMembres > 0
-            ? Math.round((total / vote.totalMembres) * 100) : 0;
           const isVoting = votingId === vote.transactionId;
 
           return (
@@ -351,14 +389,13 @@ export default function VoteScreen({ userData }) {
                 {vote.montant.toLocaleString('fr-FR')} FCFA
               </Text>
 
-              <View style={styles.progressSection}>
-                <View style={styles.progressBar}>
-                  <View style={[styles.progressFill, { width: `${participation}%`, backgroundColor: GREEN }]} />
-                </View>
-                <Text style={styles.progressText}>
-                  {participation}% de participation · Quorum requis : {vote.quorumRequis}%
-                </Text>
-              </View>
+              <ParticipationQuorumBloc
+                votesOui={vote.votesOui}
+                votesNon={vote.votesNon}
+                totalMembres={vote.totalMembres}
+                quorumPct={vote.quorumRequis}
+                accentColor={GREEN}
+              />
 
               <View style={styles.countersRow}>
                 <View style={[styles.counter, { backgroundColor: '#f0fdf4' }]}>
@@ -510,6 +547,27 @@ const styles = StyleSheet.create({
   progressBar: { height: 8, backgroundColor: '#e5e7eb', borderRadius: 4, overflow: 'hidden', marginBottom: 6 },
   progressFill: { height: '100%', borderRadius: 4 },
   progressText: { fontSize: 12, color: '#6b7280' },
+  participBox: {
+    marginBottom: 16,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  participTitle: { fontSize: 13, fontWeight: '900', color: '#111827', marginBottom: 10 },
+  participBarTrack: {
+    height: 10,
+    backgroundColor: '#e5e7eb',
+    borderRadius: 6,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  participBarFill: { height: '100%', borderRadius: 6 },
+  participLine: { fontSize: 13, fontWeight: '800', color: '#374151', marginBottom: 4 },
+  quorumLine: { fontSize: 12, fontWeight: '700', color: '#6b7280', marginBottom: 8 },
+  voteDetailLine: { fontSize: 13, fontWeight: '700', color: '#111827', lineHeight: 20 },
+  manqueLine: { fontSize: 13, fontWeight: '900', marginTop: 10 },
   countersRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
   counter: { flex: 1, borderRadius: 16, padding: 14, alignItems: 'center' },
   counterIcon: { fontSize: 22, marginBottom: 4 },
