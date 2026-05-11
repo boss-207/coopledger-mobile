@@ -4,7 +4,7 @@ import { getFirestore } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ⚠️ Remplace par tes vraies clés Firebase (les mêmes que le web)
-const firebaseConfig = {
+export const firebaseConfig = {
   apiKey: "AIzaSyATAnTfmMu0CI1E9rggP07MxUmEg4VYKKs",
   authDomain: "coopledger-3cf7c.firebaseapp.com",
   projectId: "coopledger-3cf7c",

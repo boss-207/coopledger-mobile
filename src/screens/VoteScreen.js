@@ -44,10 +44,12 @@ function ParticipationQuorumBloc({
         <View style={[styles.participBarFill, { width: `${pctBar}%`, backgroundColor: accentColor }]} />
       </View>
       <Text style={styles.participLine}>
-        {totalVotes}/{totalMembres} membres ont voté
+        {totalVotes} vote{totalVotes > 1 ? 's' : ''} enregistré{totalVotes > 1 ? 's' : ''} sur {totalMembres} membre
+        {totalMembres > 1 ? 's' : ''} (base quorum {quorumPct} %)
       </Text>
       <Text style={styles.quorumLine}>
-        Quorum requis : {qInfo.votesNecessaires} vote{qInfo.votesNecessaires > 1 ? 's' : ''} OUI ({quorumPct}%)
+        Quorum : {qInfo.votesNecessaires} vote{qInfo.votesNecessaires > 1 ? 's' : ''} OUI requis sur {totalMembres} membre
+        {totalMembres > 1 ? 's' : ''} ({quorumPct} %)
       </Text>
       <Text style={styles.voteDetailLine}>
         Votes OUI : {votesOui}  ✅{'\n'}
@@ -150,6 +152,13 @@ export default function VoteScreen({ userData }) {
   }
 
   async function handleVoter(transactionId, choix) {
+    if (userData?.role === 'institution') {
+      Alert.alert(
+        '🚫 Accès refusé',
+        'Les institutions sont en lecture seule.\nVous ne pouvez pas voter.'
+      );
+      return;
+    }
     setVotingId(transactionId);
     try {
       const result = await voter(transactionId, choix);
@@ -182,6 +191,12 @@ export default function VoteScreen({ userData }) {
   function canVoteOnGovernance(vote) {
     if (!vote) return { ok: false, reason: 'Vote introuvable.' };
     if (vote.statut !== 'ouvert') return { ok: false, reason: 'Ce vote est terminé.' };
+    if (userData?.role === 'institution') {
+      return {
+        ok: false,
+        reason: 'Les institutions sont en lecture seule. Vous ne pouvez pas voter.',
+      };
+    }
     const uid = userData?.uid;
     if (!uid) return { ok: false, reason: 'Connexion requise.' };
     if (userData?.statut && userData.statut !== 'actif') {
@@ -200,6 +215,13 @@ export default function VoteScreen({ userData }) {
   }
 
   async function handleVoterGouvernance(voteId, choix) {
+    if (userData?.role === 'institution') {
+      Alert.alert(
+        '🚫 Accès refusé',
+        'Les institutions sont en lecture seule.\nVous ne pouvez pas voter.'
+      );
+      return;
+    }
     if (!userData?.uid) return Alert.alert('Erreur', 'Tu dois être connecté.');
     const vote = govVotes.find((v) => v.id === voteId);
     const check = canVoteOnGovernance(vote);
@@ -513,7 +535,13 @@ export default function VoteScreen({ userData }) {
                 </View>
               </View>
 
-              {dejaVote ? (
+              {userData?.role === 'institution' ? (
+                <View style={styles.dejaVoteBox}>
+                  <Text style={styles.dejaVoteText}>
+                    Les institutions sont en lecture seule : pas de vote sur les propositions financières.
+                  </Text>
+                </View>
+              ) : dejaVote ? (
                 <View style={styles.dejaVoteBox}>
                   <Text style={styles.dejaVoteText}>
                     ✅ Tu as voté {dejaVote.toUpperCase()} — signé cryptographiquement sur Polygon

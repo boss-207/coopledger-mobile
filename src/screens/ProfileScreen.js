@@ -12,6 +12,7 @@ import {
   Share,
   ActivityIndicator,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import { signOut } from 'firebase/auth';
 import { auth, db } from '../config/firebase';
@@ -41,6 +42,7 @@ function membreDoitVoterSurCeVote(uid, vote) {
 }
 
 export default function ProfileScreen({ userData }) {
+  const navigation = useNavigation();
   const { votes: votesPolygonFinanciers } = useVotes();
   const roleColors = { president: '#7c3aed', tresorier: '#2563eb', membre: GREEN };
   const roleLabels = { president: '🛡️ Président', tresorier: '🏦 Trésorier', membre: '👤 Membre' };
@@ -328,6 +330,28 @@ export default function ProfileScreen({ userData }) {
         </View>
       </View>
 
+      {(userData?.role === 'president' || userData?.role === 'tresorier') ? (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>📌 Raccourcis coopérative</Text>
+          <TouchableOpacity
+            style={styles.shortcutRow}
+            onPress={() => navigation.navigate('RapportMensuel')}
+          >
+            <Text style={styles.shortcutText}>📄 Rapport mensuel</Text>
+            <Text style={styles.shortcutArrow}>→</Text>
+          </TouchableOpacity>
+          {userData?.role === 'president' ? (
+            <TouchableOpacity
+              style={styles.shortcutRow}
+              onPress={() => navigation.navigate('MembresGestion')}
+            >
+              <Text style={styles.shortcutText}>👥 Gestion des membres</Text>
+              <Text style={styles.shortcutArrow}>→</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
+
       {/* WALLET POLYGON + CONTRAT */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>⛓️ Polygon Amoy — étapes</Text>
@@ -537,6 +561,16 @@ const styles = StyleSheet.create({
     marginBottom: 14, paddingBottom: 10,
     borderBottomWidth: 1, borderBottomColor: '#f3f4f6',
   },
+  shortcutRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  shortcutText: { fontSize: 15, fontWeight: '700', color: GREEN_DARK },
+  shortcutArrow: { fontSize: 16, color: GREEN, fontWeight: '700' },
   helpText: {
     fontSize: 13, color: '#4b5563', lineHeight: 20, marginBottom: 14,
   },

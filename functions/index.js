@@ -647,20 +647,48 @@ exports.envoyerRapportMensuel = onCall(
   }
 );
 
-exports.rapportAutomatiqueMensuel = onSchedule(
+// ─── Rapport mensuel planifié ─────────────────────────────────────────────
+// MODE TEST : cron toutes les 2 minutes (`*/2 * * * *`) — désactiver en production.
+exports.rapportTest = onSchedule(
   {
-    schedule: "0 7 1 * *",
+    schedule: "*/2 * * * *",
     timeZone: "Africa/Lome",
     secrets: [resendApiKey, resendFrom],
   },
   async () => {
     const now = new Date();
-    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const mois = prev.getMonth() + 1;
-    const annee = prev.getFullYear();
-    await sendMonthlyReport({ mois, annee, triggeredBy: "scheduler" });
+    const mois = now.getMonth() + 1;
+    const annee = now.getFullYear();
+    console.log(`[TEST] Envoi rapport ${mois}/${annee}`);
+    try {
+      await sendMonthlyReport({
+        mois,
+        annee,
+        triggeredBy: "test_scheduler",
+      });
+      console.log("[TEST] Rapport envoyé ✅");
+    } catch (err) {
+      console.error("[TEST] Erreur:", err);
+    }
   }
 );
+
+// MODE PRODUCTION — le 1er de chaque mois à 7h (Lomé), rapport du mois précédent.
+// Décommenter ci-dessous et supprimer ou désactiver `rapportTest` avant la mise en prod.
+// exports.rapportAutomatiqueMensuel = onSchedule(
+//   {
+//     schedule: "0 7 1 * *",
+//     timeZone: "Africa/Lome",
+//     secrets: [resendApiKey, resendFrom],
+//   },
+//   async () => {
+//     const now = new Date();
+//     const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+//     const mois = prev.getMonth() + 1;
+//     const annee = prev.getFullYear();
+//     await sendMonthlyReport({ mois, annee, triggeredBy: "scheduler" });
+//   }
+// );
 
 /** @param {unknown} n */
 function formatMontantFcfa(n) {

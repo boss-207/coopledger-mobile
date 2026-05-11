@@ -28,6 +28,7 @@ function detectOperateurFromPhone(phone) {
 }
 
 export default function PaiementAppelScreen({ route, navigation, userData }) {
+  const coopId = userData?.cooperativeId || 'broukou';
   const appel = route?.params?.appel;
   const [operateurSelectionne, setOperateurSelectionne] = useState(detectOperateurFromPhone(userData?.telephone || ''));
   const [telephone, setTelephone] = useState(userData?.telephone || '');
@@ -80,7 +81,7 @@ export default function PaiementAppelScreen({ route, navigation, userData }) {
         appelDeFondsId: appel.id,
         membreUid: userData?.uid || '',
         membreNom: userData?.nom || 'Membre',
-        cooperativeId: 'broukou',
+        cooperativeId: coopId,
         statut: 'valide',
         date: serverTimestamp(),
         hash: `fedapay_${creation.transactionId}`,
@@ -101,7 +102,7 @@ export default function PaiementAppelScreen({ route, navigation, userData }) {
           type: 'appel_fonds_cloture',
           titre: '🎉 Tous les membres ont payé !',
           message: `${(Number(appel.totalCollecte || 0) + montant).toLocaleString('fr-FR')} FCFA collectés.`,
-          cooperativeId: 'broukou',
+          cooperativeId: coopId,
           createdAt: serverTimestamp(),
         });
       }

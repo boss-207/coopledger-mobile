@@ -3,27 +3,30 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   RefreshControl, Linking,
 } from 'react-native';
-import { useTransactions, useSolde, useVotes } from '../hooks/useBlockchain';
+import { useVotes } from '../hooks/useBlockchain';
 import { polygonscanTxUrl, formatFCFA } from '../config/blockchain';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { db } from '../config/firebase';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
-const GREEN_LIGHT = '#dcfce7';
-
 function formatDate(d) {
   if (!d) return '';
   return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
 }
 
 export default function DashboardScreen({ userData, navigation }) {
-  const { transactions, loading: txLoading, refetch: refetchTx } = useTransactions();
-  const { solde, loading: soldeLoading, refetch: refetchSolde } = useSolde();
-  const { votes, loading: votesLoading, refetch: refetchVotes } = useVotes();
+  const { votes, refetch: refetchVotes } = useVotes();
+  const [transactions, setTransactions] = useState([]);
+  const [solde, setSolde] = useState(0);
+  const [revenus, setRevenus] = useState(0);
+  const [depenses, setDepenses] = useState(0);
+  const [txLoading, setTxLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(new Date());
   const [appelsActifs, setAppelsActifs] = useState([]);
+
+  const coopId = userData?.cooperativeId || 'broukou';
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -31,10 +34,60 @@ export default function DashboardScreen({ userData, navigation }) {
   }, []);
 
   useEffect(() => {
+    const qTx = query(
+      collection(db, 'transactions'),
+      where('cooperativeId', '==', coopId),
+      orderBy('date', 'desc'),
+      limit(50)
+    );
+    const unsubTx = onSnapshot(qTx, (snap) => {
+      const data = snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+        date: d.data().date?.toDate?.() || new Date(d.data().date),
+      }));
+      setTransactions(data);
+
+      const validTx = data.filter((t) => t.statut === 'valide');
+      const entrees = ['cotisation', 'mobile_money', 'main_a_main'];
+      const sorties = ['depense'];
+
+      const rev = validTx
+        .filter(
+          (t) =>
+            entrees.includes(t.typeTransaction)
+            || t.type === 'entree'
+            || t.type === 'revenu'
+        )
+        .reduce((a, t) => a + Number(t.montant || 0), 0);
+
+      const dep = validTx
+        .filter(
+          (t) =>
+            sorties.includes(t.typeTransaction)
+            || t.type === 'sortie'
+        )
+        .reduce((a, t) => a + Number(t.montant || 0), 0);
+
+      setRevenus(rev);
+      setDepenses(dep);
+      setSolde(rev - dep);
+      setTxLoading(false);
+    }, () => {
+      setTransactions([]);
+      setRevenus(0);
+      setDepenses(0);
+      setSolde(0);
+      setTxLoading(false);
+    });
+    return () => unsubTx();
+  }, [coopId]);
+
+  useEffect(() => {
     const q = query(
       collection(db, 'appels_fonds'),
       where('statut', '==', 'actif'),
-      where('cooperativeId', '==', 'broukou'),
+      where('cooperativeId', '==', coopId),
       orderBy('dateCreation', 'desc')
     );
     const unsub = onSnapshot(q, (snap) => {
@@ -47,17 +100,9 @@ export default function DashboardScreen({ userData, navigation }) {
 
   async function onRefresh() {
     setRefreshing(true);
-    await Promise.all([refetchTx(), refetchSolde(), refetchVotes()]);
+    await refetchVotes();
     setRefreshing(false);
   }
-
-  const validTx = transactions.filter(t => t.statut === 'valide');
-  const depenses = validTx
-    .filter(t => t.type === 'sortie' || t.type === 'depense')
-    .reduce((a, t) => a + t.montant, 0);
-  const revenus = validTx
-    .filter(t => t.type === 'entree' || t.type === 'revenu')
-    .reduce((a, t) => a + t.montant, 0);
 
   const peutCreer = userData?.role === 'tresorier' || userData?.role === 'president';
   const roleColors = { president: '#7c3aed', tresorier: '#2563eb', membre: GREEN };
@@ -83,6 +128,19 @@ export default function DashboardScreen({ userData, navigation }) {
           </Text>
         </View>
       </View>
+
+      {(userData?.role === 'president' || userData?.role === 'tresorier') ? (
+        <View style={styles.quickLinks}>
+          <TouchableOpacity onPress={() => navigation.navigate('Profil', { screen: 'RapportMensuel' })}>
+            <Text style={styles.quickLinkText}>📄 Rapport mensuel</Text>
+          </TouchableOpacity>
+          {userData?.role === 'president' ? (
+            <TouchableOpacity onPress={() => navigation.navigate('Profil', { screen: 'MembresGestion' })}>
+              <Text style={styles.quickLinkText}>👥 Membres</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
 
       {/* ALERTE VOTE */}
       {votes.length > 0 && (
@@ -196,13 +254,13 @@ export default function DashboardScreen({ userData, navigation }) {
         {txLoading ? (
           <View style={styles.emptyBox}>
             <Text style={{ fontSize: 40, marginBottom: 8 }}>⏳</Text>
-            <Text style={styles.emptyText}>Chargement depuis Polygon...</Text>
+            <Text style={styles.emptyText}>Chargement depuis Firebase...</Text>
           </View>
         ) : transactions.length === 0 ? (
           <View style={styles.emptyBox}>
             <Text style={{ fontSize: 40, marginBottom: 8 }}>📋</Text>
             <Text style={styles.emptyText}>Aucune transaction pour le moment</Text>
-            <Text style={styles.emptySubText}>Les transactions apparaîtront ici depuis la blockchain</Text>
+            <Text style={styles.emptySubText}>Les transactions validées apparaîtront ici depuis le registre Firebase</Text>
           </View>
         ) : (
           transactions.slice(0, 5).map((tx, i) => (
@@ -242,8 +300,14 @@ function StatCard({ icon, label, value, color, bg }) {
   );
 }
 
+function txEstEntree(tx) {
+  const entrees = ['cotisation', 'mobile_money', 'main_a_main'];
+  return entrees.includes(tx.typeTransaction) || tx.type === 'entree' || tx.type === 'revenu';
+}
+
 function TxRow({ tx }) {
-  const isEntree = tx.type === 'entree' || tx.type === 'revenu';
+  const isEntree = txEstEntree(tx);
+  const montant = Number(tx.montant || 0);
   const statutColors = { valide: GREEN, en_cours: '#d97706', rejete: '#dc2626', annule: '#6b7280' };
   const statutLabels = { valide: 'Validé', en_cours: 'Vote en cours', rejete: 'Rejeté', annule: 'Annulé' };
 
@@ -264,7 +328,7 @@ function TxRow({ tx }) {
       </View>
       <View style={{ alignItems: 'flex-end' }}>
         <Text style={[styles.txAmount, { color: isEntree ? GREEN : '#dc2626' }]}>
-          {isEntree ? '+' : '-'}{tx.montant.toLocaleString('fr-FR')}
+          {isEntree ? '+' : '-'}{montant.toLocaleString('fr-FR')}
         </Text>
         <View style={[styles.txStatut, { backgroundColor: (statutColors[tx.statut] || '#6b7280') + '20' }]}>
           <Text style={[styles.txStatutText, { color: statutColors[tx.statut] || '#6b7280' }]}>
@@ -282,6 +346,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingHorizontal: 20, paddingTop: 16, paddingBottom: 12,
   },
+  quickLinks: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    paddingHorizontal: 20,
+    marginBottom: 10,
+  },
+  quickLinkText: { color: GREEN, fontWeight: '700', fontSize: 13 },
   greeting: { fontSize: 22, fontWeight: '800', color: '#111827' },
   date: { fontSize: 13, color: '#6b7280', marginTop: 2 },
   roleBadge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },

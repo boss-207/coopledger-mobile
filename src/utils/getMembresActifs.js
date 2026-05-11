@@ -9,8 +9,12 @@ import {
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
 
+function estInstitution(role) {
+  return role === 'institution';
+}
+
 /**
- * Retourne le nombre de membres avec statut "actif" (quorum / votes Firestore).
+ * Nombre de membres actifs hors institutions (quorum / votes Firestore).
  */
 export async function getNombreMembres(cooperativeId = 'broukou') {
   const snap = await getDocs(
@@ -20,11 +24,11 @@ export async function getNombreMembres(cooperativeId = 'broukou') {
       where('statut', '==', 'actif')
     )
   );
-  return snap.size;
+  return snap.docs.filter((d) => !estInstitution(d.data().role)).length;
 }
 
 /**
- * Liste des profils membres actifs (pour sélecteurs, stats, etc.).
+ * Liste des profils membres actifs, institutions exclues.
  */
 export async function getMembresActifs(cooperativeId = 'broukou') {
   const snap = await getDocs(
@@ -34,10 +38,50 @@ export async function getMembresActifs(cooperativeId = 'broukou') {
       where('statut', '==', 'actif')
     )
   );
-  return snap.docs.map((d) => ({
-    uid: d.id,
-    ...d.data(),
-  }));
+  return snap.docs
+    .filter((d) => !estInstitution(d.data().role))
+    .map((d) => ({
+      uid: d.id,
+      ...d.data(),
+    }));
+}
+
+/**
+ * Nombre d’institutions actives (lecture seule, hors quorum).
+ */
+export async function getNombreInstitutions(cooperativeId = 'broukou') {
+  const snap = await getDocs(
+    query(
+      collection(db, 'users'),
+      where('cooperativeId', '==', cooperativeId),
+      where('role', '==', 'institution'),
+      where('statut', '==', 'actif')
+    )
+  );
+  return snap.size;
+}
+
+/**
+ * Totaux membres + institutions et libellé pour l’interface.
+ */
+export async function getStatsMembres(cooperativeId = 'broukou') {
+  const totalMembres = await getNombreMembres(cooperativeId);
+  const totalInstitutions = await getNombreInstitutions(cooperativeId);
+  const total = totalMembres + totalInstitutions;
+
+  let label = `${total} personne${total > 1 ? 's' : ''}`;
+  if (totalInstitutions > 0) {
+    label += ` dont ${totalInstitutions} institution${totalInstitutions > 1 ? 's' : ''}`;
+  } else {
+    label += ' dans la coopérative';
+  }
+
+  return {
+    totalMembres,
+    totalInstitutions,
+    total,
+    label,
+  };
 }
 
 /**

@@ -23,13 +23,16 @@ import {
   setDoc,
   Timestamp,
 } from 'firebase/firestore';
-import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { createUserWithEmailAndPassword, getAuth, signOut } from 'firebase/auth';
+import { deleteApp, initializeApp } from 'firebase/app';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { ethers } from 'ethers';
-import { auth, db } from '../config/firebase';
+import * as Clipboard from 'expo-clipboard';
+import { auth, db, firebaseConfig } from '../config/firebase';
 import { useVotes } from '../hooks/useBlockchain';
 import {
   getNombreMembres,
+  getStatsMembres,
   exclureMembre,
   reintegrerMembre,
 } from '../utils/getMembresActifs';
@@ -84,6 +87,26 @@ function formatDateHeure(value) {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+async function creerCompteInstitution(email, motDePasse) {
+  const appName = `secondary_${Date.now()}`;
+  const appSecondaire = initializeApp(firebaseConfig, appName);
+  const authSecondaire = getAuth(appSecondaire);
+  try {
+    const cred = await createUserWithEmailAndPassword(authSecondaire, email, motDePasse);
+    const uid = cred.user.uid;
+    await authSecondaire.signOut();
+    await deleteApp(appSecondaire);
+    return { success: true, uid };
+  } catch (err) {
+    try {
+      await deleteApp(appSecondaire);
+    } catch (_) {
+      /* ignore */
+    }
+    return { success: false, error: err?.code || err?.message };
+  }
 }
 
 function generateTempPassword(length = 8) {
@@ -196,6 +219,13 @@ export default function MembresScreen({ userData }) {
   const [institutionEmail, setInstitutionEmail] = useState('');
   const [institutionType, setInstitutionType] = useState('Banque');
   const [institutionTempPassword, setInstitutionTempPassword] = useState('');
+  const [statsMembres, setStatsMembres] = useState({
+    totalMembres: 0,
+    totalInstitutions: 0,
+    total: 0,
+    label: '',
+  });
+  const [institutionMdpCopie, setInstitutionMdpCopie] = useState(false);
 
   // Transferts par vote (président uniquement)
   const [modalPickPresident, setModalPickPresident] = useState(false);
@@ -217,6 +247,7 @@ export default function MembresScreen({ userData }) {
         setUsers(list);
         setLoading(false);
         setError(null);
+        getStatsMembres(coopId).then(setStatsMembres);
       },
       () => {
         setError('Impossible de charger les membres. Vérifie la connexion Firestore.');
@@ -400,13 +431,16 @@ export default function MembresScreen({ userData }) {
     setInstitutionNom('');
     setInstitutionEmail('');
     setInstitutionType('Banque');
-    setInstitutionTempPassword(generateTempPassword(8));
+    setInstitutionTempPassword(generateTempPassword(10));
+    setInstitutionMdpCopie(false);
     setInstitutionModalVisible(true);
   }
 
-  function copierMotDePasseInstitution() {
+  async function copierMotDePasseInstitution() {
     if (!institutionTempPassword) return;
-    Alert.alert('Mot de passe temporaire', `${institutionTempPassword}\n\nCopiez-le manuellement.`);
+    await Clipboard.setStringAsync(institutionTempPassword);
+    setInstitutionMdpCopie(true);
+    setTimeout(() => setInstitutionMdpCopie(false), 2000);
   }
 
   async function handleAddInstitution() {
@@ -416,45 +450,30 @@ export default function MembresScreen({ userData }) {
     }
     setActionLoading(true);
     try {
-      let uidCree = null;
-      try {
-        const functions = getFunctions(undefined, 'europe-west1');
-        const createInstitution = httpsCallable(functions, 'creerCompteInstitution');
-        const res = await createInstitution({
-          nom: institutionNom.trim(),
-          email: institutionEmail.trim().toLowerCase(),
-          motDePasseTemporaire: institutionTempPassword,
-        });
-        uidCree = res?.data?.uid || null;
-      } catch (e) {
-        const continuerFallback = await new Promise((resolve) => {
+      const emailInst = institutionEmail.trim().toLowerCase();
+      const mdp = institutionTempPassword;
+      const creation = await creerCompteInstitution(emailInst, mdp);
+
+      if (!creation.success) {
+        if (creation.error === 'auth/email-already-in-use') {
           Alert.alert(
-            'Création côté client',
-            'La Function de création institution est indisponible. Continuer depuis le client ? Le président sera déconnecté.',
-            [
-              { text: 'Annuler', style: 'cancel', onPress: () => resolve(false) },
-              { text: 'Continuer', style: 'destructive', onPress: () => resolve(true) },
-            ]
+            'Email déjà utilisé',
+            'Un compte Firebase existe déjà avec cet email. Choisissez une autre adresse.'
           );
-        });
-        if (!continuerFallback) return;
-        const createRes = await createUserWithEmailAndPassword(
-          auth,
-          institutionEmail.trim().toLowerCase(),
-          institutionTempPassword
-        );
-        uidCree = createRes?.user?.uid || null;
+          return;
+        }
+        Alert.alert('Erreur', `Création impossible : ${creation.error || 'erreur inconnue'}.`);
+        return;
       }
 
-      if (!uidCree) throw new Error('Impossible de créer le compte institution.');
-
+      const uidCree = creation.uid;
       await setDoc(doc(db, 'users', uidCree), {
         uid: uidCree,
         nom: institutionNom.trim(),
-        email: institutionEmail.trim().toLowerCase(),
+        email: emailInst,
         role: 'institution',
         typeInstitution: institutionType,
-        cooperativeId: 'broukou',
+        cooperativeId: coopId,
         statut: 'actif',
         dateInscription: new Date(),
         walletAddress: '',
@@ -462,10 +481,10 @@ export default function MembresScreen({ userData }) {
       });
 
       setInstitutionModalVisible(false);
-      Alert.alert('Succès', `🏦 ${institutionNom.trim()} ajouté avec succès !`);
-      if (auth.currentUser?.uid !== userData?.uid) {
-        await signOut(auth);
-      }
+      Alert.alert(
+        '✅ Compte créé !',
+        `Institution : ${institutionNom.trim()}\nEmail : ${emailInst}\nMot de passe : ${mdp}\n\n⚠️ Notez ce mot de passe et transmettez-le à l’institution de façon sécurisée.`
+      );
     } catch (e) {
       Alert.alert('Erreur', e?.message || 'Création institution impossible.');
     } finally {
@@ -941,11 +960,23 @@ export default function MembresScreen({ userData }) {
               <Text style={styles.headerSub}>Coopérative {coopId}</Text>
             </View>
 
-            <View style={styles.statsRow}>
-              <View style={styles.statCard}>
-                <Text style={styles.statLabel}>Membres actifs</Text>
-                <Text style={styles.statValue}>{activeMembers.length}</Text>
+            <View style={styles.statsCard}>
+              <Text style={styles.statsMainNumber}>{statsMembres.total}</Text>
+              <Text style={styles.statsLabel}>{statsMembres.label}</Text>
+              <View style={styles.statsMembresRow}>
+                <View style={styles.statsItem}>
+                  <Text style={styles.statsNum}>👤 {statsMembres.totalMembres}</Text>
+                  <Text style={styles.statsSub}>Membres actifs</Text>
+                </View>
+                <View style={styles.statsDivider} />
+                <View style={styles.statsItem}>
+                  <Text style={styles.statsNum}>🏦 {statsMembres.totalInstitutions}</Text>
+                  <Text style={styles.statsSub}>Institutions</Text>
+                </View>
               </View>
+            </View>
+
+            <View style={styles.statsRow}>
               <View style={styles.statCard}>
                 <Text style={styles.statLabel}>Participation</Text>
                 <Text style={styles.statValue}>{participationRate}%</Text>
@@ -1256,11 +1287,20 @@ export default function MembresScreen({ userData }) {
 
             <Text style={styles.validationLabel}>Mot de passe temporaire</Text>
             <View style={styles.tempPasswordRow}>
-              <TextInput style={styles.tempPasswordInput} value={institutionTempPassword} editable={false} />
+              <TextInput
+                style={styles.tempPasswordInput}
+                value={institutionTempPassword}
+                onChangeText={setInstitutionTempPassword}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
               <TouchableOpacity style={styles.tempCopyBtn} onPress={copierMotDePasseInstitution}>
-                <Text style={styles.tempCopyText}>Copier</Text>
+                <Text style={styles.tempCopyText}>📋 Copier</Text>
               </TouchableOpacity>
             </View>
+            {institutionMdpCopie ? (
+              <Text style={styles.copieOk}>Copié ✅</Text>
+            ) : null}
 
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.cancelBtn} onPress={() => setInstitutionModalVisible(false)}>
@@ -1542,6 +1582,27 @@ const styles = StyleSheet.create({
   },
   headerTitle: { color: '#fff', fontSize: 22, fontWeight: '900' },
   headerSub: { color: 'rgba(255,255,255,0.7)', marginTop: 4 },
+
+  statsCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    elevation: 3,
+  },
+  statsMainNumber: { fontSize: 32, fontWeight: '900', color: GREEN_DARK, textAlign: 'center' },
+  statsLabel: { fontSize: 14, color: '#4b5563', textAlign: 'center', marginTop: 4, marginBottom: 14 },
+  statsMembresRow: { flexDirection: 'row', alignItems: 'stretch' },
+  statsItem: { flex: 1, alignItems: 'center' },
+  statsNum: { fontSize: 16, fontWeight: '800', color: '#111827' },
+  statsSub: { fontSize: 11, color: '#6b7280', marginTop: 4, textAlign: 'center' },
+  statsDivider: { width: 1, backgroundColor: '#e5e7eb', marginVertical: 4 },
+  copieOk: { color: '#15803d', fontWeight: '800', textAlign: 'center', marginTop: 6 },
 
   statsRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
   statCard: {

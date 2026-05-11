@@ -40,7 +40,7 @@ export default function App() {
           </Text>
           <Text style={styles.splashSub}>CTA de Broukou · Région de la Kara</Text>
           <ActivityIndicator color="#4ade80" size="large" style={{ marginTop: 32 }} />
-          <Text style={styles.splashLoading}>Connexion à la blockchain...</Text>
+          <Text style={styles.splashLoading}>Chargement de votre espace…</Text>
         </View>
       ) : !user ? (
         <LoginScreen />

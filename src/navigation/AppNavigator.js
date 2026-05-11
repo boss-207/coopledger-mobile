@@ -1,8 +1,9 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
-import { View, Text, Platform } from 'react-native';
+import { View, Text, Platform, TouchableOpacity } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 
 import DashboardScreen from '../screens/DashboardScreen';
 import VoteScreen from '../screens/VoteScreen';
@@ -46,6 +47,49 @@ function TabIcon({ emoji, label, focused }) {
   );
 }
 
+function VideOngletNouvelleTx() {
+  return <View style={{ flex: 1 }} />;
+}
+
+function BoutonOngletNouvelleTransaction(props) {
+  const navigation = useNavigation();
+  return (
+    <TouchableOpacity
+      activeOpacity={0.88}
+      accessibilityRole="button"
+      {...props}
+      onPress={() => navigation.navigate('Accueil', { screen: 'NouvelleTransaction' })}
+      style={[
+        props.style,
+        {
+          flex: 1,
+          justifyContent: 'center',
+          alignItems: 'center',
+        },
+      ]}
+    >
+      <View
+        style={{
+          width: 56,
+          height: 56,
+          borderRadius: 28,
+          backgroundColor: '#15803d',
+          alignItems: 'center',
+          justifyContent: 'center',
+          marginBottom: 20,
+          elevation: 8,
+          shadowColor: '#15803d',
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.4,
+          shadowRadius: 8,
+        }}
+      >
+        <Text style={{ fontSize: 28, color: 'white' }}>➕</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 function DashboardStack({ userData }) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -75,6 +119,37 @@ function DashboardStack({ userData }) {
       </Stack.Screen>
       <Stack.Screen name="PaiementAppel" options={{ headerShown: false }}>
         {props => <PaiementAppelScreen {...props} userData={userData} />}
+      </Stack.Screen>
+    </Stack.Navigator>
+  );
+}
+
+function ProfilStack({ userData }) {
+  return (
+    <Stack.Navigator
+      screenOptions={{
+        headerStyle: { backgroundColor: GREEN_DARK },
+        headerTintColor: '#fff',
+        headerTitleStyle: { fontWeight: '800' },
+      }}
+    >
+      <Stack.Screen
+        name="ProfileMain"
+        options={{ headerShown: false }}
+      >
+        {props => <ProfileScreen {...props} userData={userData} />}
+      </Stack.Screen>
+      <Stack.Screen
+        name="RapportMensuel"
+        options={{ headerTitle: '📄 Rapport mensuel' }}
+      >
+        {props => <RapportScreen {...props} userData={userData} />}
+      </Stack.Screen>
+      <Stack.Screen
+        name="MembresGestion"
+        options={{ headerTitle: '👥 Membres' }}
+      >
+        {props => <MembresScreen {...props} userData={userData} />}
       </Stack.Screen>
     </Stack.Navigator>
   );
@@ -135,18 +210,13 @@ export default function AppNavigator({ userData }) {
       </Tab.Screen>
 
       <Tab.Screen
-        name="Rapport"
+        name="NouvelleTx"
+        component={VideOngletNouvelleTx}
         options={{
-          headerShown: true,
-          headerTitle: 'Rapport Mensuel',
-          headerStyle: { backgroundColor: GREEN_DARK },
-          headerTintColor: '#fff',
-          headerTitleStyle: { fontWeight: '800' },
-          tabBarIcon: ({ focused }) => <TabIcon emoji="📄" label="Rapport" focused={focused} />,
+          tabBarLabel: '',
+          tabBarButton: (props) => <BoutonOngletNouvelleTransaction {...props} />,
         }}
-      >
-        {() => <RapportScreen userData={userData} />}
-      </Tab.Screen>
+      />
 
       <Tab.Screen
         name="Historique"
@@ -163,31 +233,13 @@ export default function AppNavigator({ userData }) {
       </Tab.Screen>
 
       <Tab.Screen
-        name="Membres"
-        options={{
-          headerShown: true,
-          headerTitle: '👥 Membres',
-          headerStyle: { backgroundColor: GREEN_DARK },
-          headerTintColor: '#fff',
-          headerTitleStyle: { fontWeight: '800' },
-          tabBarIcon: ({ focused }) => <TabIcon emoji="👥" label="Membres" focused={focused} />,
-        }}
-      >
-        {() => <MembresScreen userData={userData} />}
-      </Tab.Screen>
-
-      <Tab.Screen
         name="Profil"
         options={{
-          headerShown: true,
-          headerTitle: '👤 Mon Profil',
-          headerStyle: { backgroundColor: GREEN_DARK },
-          headerTintColor: '#fff',
-          headerTitleStyle: { fontWeight: '800' },
+          headerShown: false,
           tabBarIcon: ({ focused }) => <TabIcon emoji="👤" label="Profil" focused={focused} />,
         }}
       >
-        {() => <ProfileScreen userData={userData} />}
+        {() => <ProfilStack userData={userData} />}
       </Tab.Screen>
     </Tab.Navigator>
   );

@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   Linking,
+  Alert,
 } from 'react-native';
 import {
   collection,
@@ -16,7 +17,8 @@ import {
   query,
   where,
 } from 'firebase/firestore';
-import { db } from '../config/firebase';
+import { signOut } from 'firebase/auth';
+import { auth, db } from '../config/firebase';
 import { formaterMontant } from '../utils/soldeUtils';
 import { getBadgeType } from '../utils/transactionTypes';
 import { calculerScoreTransparence } from '../utils/scoreTransparence';
@@ -122,7 +124,10 @@ export default function InstitutionDashboard({ userData }) {
     unsubs.push(onSnapshot(
       query(collection(db, 'users'), where('statut', '==', 'actif'), where('cooperativeId', '==', coopId)),
       (s) => {
-        setMembresActifs(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+        const actifs = s.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .filter((u) => u.role !== 'institution');
+        setMembresActifs(actifs);
         done();
       },
       done
@@ -216,6 +221,25 @@ export default function InstitutionDashboard({ userData }) {
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 30 }}>
       <View style={styles.header}>
+        <TouchableOpacity
+          onPress={() => {
+            Alert.alert(
+              'Se déconnecter ?',
+              'Vous devrez vous reconnecter avec\nvos identifiants.',
+              [
+                { text: 'Annuler', style: 'cancel' },
+                {
+                  text: 'Se déconnecter',
+                  style: 'destructive',
+                  onPress: () => signOut(auth),
+                },
+              ]
+            );
+          }}
+          style={styles.logoutHeaderBtn}
+        >
+          <Text style={styles.logoutHeaderText}>🚪 Déconnexion</Text>
+        </TouchableOpacity>
         <Text style={styles.logo}>🌱 CoopLedger</Text>
         <Text style={styles.title}>🏦 Espace Institution</Text>
         <Text style={styles.subtitle}>{userData?.nom || 'Institution'}</Text>
@@ -304,7 +328,25 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8fafc' },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc' },
   loadingText: { marginTop: 10, color: '#6b7280' },
-  header: { backgroundColor: GREEN_DARK, padding: 18, borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
+  header: {
+    position: 'relative',
+    backgroundColor: GREEN_DARK,
+    padding: 18,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+  },
+  logoutHeaderBtn: {
+    position: 'absolute',
+    right: 16,
+    top: 18,
+    padding: 8,
+    zIndex: 2,
+  },
+  logoutHeaderText: {
+    color: '#fca5a5',
+    fontSize: 13,
+    fontWeight: '700',
+  },
   logo: { color: '#fff', fontWeight: '900', fontSize: 20 },
   title: { color: '#fff', marginTop: 8, fontSize: 18, fontWeight: '900' },
   subtitle: { color: 'rgba(255,255,255,0.8)', marginTop: 4 },
