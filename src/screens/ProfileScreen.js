@@ -12,6 +12,7 @@ import {
   Share,
   ActivityIndicator,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { signOut } from 'firebase/auth';
 import { auth, db } from '../config/firebase';
 import { collection, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
@@ -23,6 +24,7 @@ import {
   isContractConfigured,
   polygonscanAddressUrl,
 } from '../config/blockchain';
+import { genererWallet, getAdresseWallet, truncateAddress } from '../utils/walletManager';
 import { CONTRACT_ADDRESS } from '../config/contract';
 
 const GREEN = '#15803d';
@@ -80,10 +82,10 @@ export default function ProfileScreen({ userData }) {
   }, [userData?.uid, coopId]);
 
   useEffect(() => {
-    getWalletAddress()
-      .then(setWalletAddress)
+    getAdresseWallet(userData?.uid)
+      .then((addr) => setWalletAddress(addr || null))
       .catch(() => setWalletAddress(null));
-  }, []);
+  }, [userData?.uid]);
 
   useEffect(() => {
     setTelephoneInput(userData?.telephone || '');
@@ -227,6 +229,29 @@ export default function ProfileScreen({ userData }) {
   async function partagerAdresse() {
     if (!walletAddress) return;
     await Share.share({ message: walletAddress });
+  }
+
+  async function copierAdresseWallet() {
+    if (!walletAddress) return;
+    await Clipboard.setStringAsync(walletAddress);
+    Alert.alert('Copié', 'Adresse wallet copiée dans le presse-papiers.');
+  }
+
+  async function handleGenererWallet() {
+    if (!userData?.uid) {
+      Alert.alert('Erreur', 'Utilisateur introuvable.');
+      return;
+    }
+    setImportLoading(true);
+    try {
+      const wallet = await genererWallet(userData.uid);
+      setWalletAddress(wallet.address || null);
+      Alert.alert('Succès', 'Wallet généré avec succès.');
+    } catch (e) {
+      Alert.alert('Erreur', e?.message || 'Impossible de générer le wallet.');
+    } finally {
+      setImportLoading(false);
+    }
   }
 
   async function confirmerImportCle() {
@@ -402,6 +427,40 @@ export default function ProfileScreen({ userData }) {
         } />
       </View>
 
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Mon Wallet</Text>
+        <Text style={styles.walletLabel}>🔗 Adresse blockchain</Text>
+
+        {walletAddress ? (
+          <View style={styles.walletRow}>
+            <Text style={styles.walletAddressText}>{truncateAddress(walletAddress)}</Text>
+            <TouchableOpacity style={styles.copyBtn} onPress={copierAdresseWallet}>
+              <Text style={styles.copyBtnText}>📋 Copier</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={[styles.smallBtn, importLoading && { opacity: 0.65 }, { alignSelf: 'flex-start' }]}
+            onPress={handleGenererWallet}
+            disabled={importLoading}
+          >
+            {importLoading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.smallBtnText}>⚙️ Générer mon wallet</Text>
+            )}
+          </TouchableOpacity>
+        )}
+
+        <Text style={styles.walletHint}>
+          Votre identifiant blockchain personnel.
+          {'\n'}
+          Utilisé pour signer les transactions
+          {'\n'}
+          CoopLedger.
+        </Text>
+      </View>
+
       {/* BLOCKCHAIN INFO */}
       <View style={[styles.section, { backgroundColor: GREEN_DARK }]}>
         <Text style={[styles.sectionTitle, { color: '#86efac', borderBottomColor: 'rgba(255,255,255,0.1)' }]}>
@@ -556,4 +615,45 @@ const styles = StyleSheet.create({
 
   footer: { alignItems: 'center', paddingVertical: 20, gap: 4 },
   footerText: { fontSize: 12, color: '#9ca3af' },
+  walletLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  walletRow: {
+    backgroundColor: '#f3f4f6',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  walletAddressText: {
+    flex: 1,
+    color: '#111827',
+    fontSize: 14,
+    fontFamily: 'monospace',
+    fontWeight: '700',
+  },
+  copyBtn: {
+    backgroundColor: GREEN,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  copyBtnText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  walletHint: {
+    marginTop: 10,
+    fontSize: 12,
+    color: '#6b7280',
+    lineHeight: 18,
+  },
 });

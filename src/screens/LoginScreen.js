@@ -4,8 +4,15 @@ import {
   ImageBackground, ActivityIndicator, KeyboardAvoidingView,
   Platform, ScrollView, Alert
 } from 'react-native';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import {
+  addDoc,
+  collection,
+  getDocs,
+  query,
+  serverTimestamp,
+  where,
+} from 'firebase/firestore';
 import { auth, db } from '../config/firebase';
 
 const GREEN = '#15803d';
@@ -13,11 +20,26 @@ const GREEN_DARK = '#14532d';
 const GREEN_LIGHT = '#dcfce7';
 
 export default function LoginScreen() {
-  const [mode, setMode] = useState('connexion');
-  const [form, setForm] = useState({ nom: '', email: '', password: '', confirmPassword: '' });
+  const [mode, setMode] = useState('connexion'); // 'connexion' | 'demande' | 'confirmation'
+  const [form, setForm] = useState({
+    nom: '',
+    email: '',
+    telephone: '',
+    message: '',
+    password: '',
+  });
   const [loading, setLoading] = useState(false);
 
   const update = (key, val) => setForm(prev => ({ ...prev, [key]: val }));
+
+  function isEmailValide(email) {
+    const v = String(email || '').trim();
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+  }
+
+  function countChiffres(value) {
+    return String(value || '').replace(/\D/g, '').length;
+  }
 
   async function handleConnexion() {
     if (!form.email || !form.password)
@@ -31,28 +53,57 @@ export default function LoginScreen() {
     setLoading(false);
   }
 
-  async function handleInscription() {
-    if (!form.nom.trim()) return Alert.alert('Erreur', 'Entre ton nom complet.');
-    if (!form.email) return Alert.alert('Erreur', 'Entre ton email.');
-    if (form.password.length < 6) return Alert.alert('Erreur', 'Minimum 6 caractères.');
-    if (form.password !== form.confirmPassword)
-      return Alert.alert('Erreur', 'Les mots de passe ne correspondent pas.');
+  async function handleDemandeCompte() {
+    const nom = form.nom.trim();
+    const email = form.email.trim().toLowerCase();
+    const telephone = form.telephone.trim();
+    const message = form.message?.trim() || '';
+
+    if (!nom) return Alert.alert('Erreur', 'Nom complet obligatoire.');
+    if (!email) return Alert.alert('Erreur', 'Email obligatoire.');
+    if (!isEmailValide(email)) return Alert.alert('Erreur', 'Format email invalide.');
+    if (!telephone) return Alert.alert('Erreur', 'Numéro de téléphone obligatoire.');
+    if (countChiffres(telephone) < 8) {
+      return Alert.alert('Erreur', 'Le numéro doit contenir au moins 8 chiffres.');
+    }
+
     setLoading(true);
     try {
-      const result = await createUserWithEmailAndPassword(auth, form.email, form.password);
-      await setDoc(doc(db, 'users', result.user.uid), {
-        nom: form.nom.trim(),
-        email: form.email.toLowerCase(),
-        role: 'membre',
+      const pendingQ = query(
+        collection(db, 'demandes_compte'),
+        where('email', '==', email),
+        where('statut', '==', 'en_attente')
+      );
+      const pendingSnap = await getDocs(pendingQ);
+      if (!pendingSnap.empty) {
+        Alert.alert('Information', 'Une demande est déjà en cours pour cet email.');
+        return;
+      }
+
+      await addDoc(collection(db, 'demandes_compte'), {
+        nom,
+        email,
+        telephone,
         cooperativeId: 'broukou',
-        dateInscription: new Date(),
-        statut: 'actif',
-        uid: result.user.uid,
+        message,
+        statut: 'en_attente',
+        dateDemande: serverTimestamp(),
+        walletAddress: '',
+        uid: '',
+        roleChoisi: '',
+        raisonRefus: '',
       });
-    } catch (err) {
-      if (err.code === 'auth/email-already-in-use')
-        Alert.alert('Erreur', 'Cet email est déjà utilisé.');
-      else Alert.alert('Erreur', 'Impossible de créer le compte.');
+
+      setMode('confirmation');
+      setForm((prev) => ({
+        ...prev,
+        nom: '',
+        email: '',
+        telephone: '',
+        message: '',
+      }));
+    } catch (e) {
+      Alert.alert('Erreur', 'Impossible d’envoyer la demande pour le moment.');
     }
     setLoading(false);
   }
@@ -78,67 +129,122 @@ export default function LoginScreen() {
           {/* CARTE */}
           <View style={styles.card}>
 
-            {/* TABS */}
-            <View style={styles.tabs}>
-              {['connexion', 'inscription'].map(m => (
-                <TouchableOpacity
-                  key={m}
-                  style={[styles.tab, mode === m && styles.tabActive]}
-                  onPress={() => setMode(m)}
-                >
-                  <Text style={[styles.tabText, mode === m && styles.tabTextActive]}>
-                    {m === 'connexion' ? 'Se connecter' : 'Rejoindre'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={styles.cardTitle}>
-              {mode === 'connexion' ? 'Espace Membre' : 'Créer mon compte'}
-            </Text>
-
-            {mode === 'inscription' && (
-              <View style={styles.memberBadge}>
-                <Text style={{ fontSize: 24 }}>👤</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.badgeTitle}>Inscription en tant que Membre</Text>
-                  <Text style={styles.badgeSub}>Consulte les comptes et vote sur les décisions.</Text>
+            {mode !== 'confirmation' ? (
+              <>
+                {/* TABS */}
+                <View style={styles.tabs}>
+                  {['connexion', 'demande'].map(m => (
+                    <TouchableOpacity
+                      key={m}
+                      style={[styles.tab, mode === m && styles.tabActive]}
+                      onPress={() => setMode(m)}
+                    >
+                      <Text style={[styles.tabText, mode === m && styles.tabTextActive]}>
+                        {m === 'connexion' ? 'Se connecter' : 'Demander un compte'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
                 </View>
-              </View>
-            )}
 
-            {mode === 'inscription' && (
-              <InputField icon="👤" placeholder="Ton nom complet" value={form.nom}
-                onChangeText={v => update('nom', v)} />
-            )}
+                <Text style={styles.cardTitle}>
+                  {mode === 'connexion' ? 'Espace Membre' : 'Demande de compte'}
+                </Text>
 
-            <InputField icon="✉️" placeholder="votre@email.com" value={form.email}
-              onChangeText={v => update('email', v)} keyboardType="email-address" autoCapitalize="none" />
+                {mode === 'demande' && (
+                  <View style={styles.memberBadge}>
+                    <Text style={{ fontSize: 24 }}>📨</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.badgeTitle}>Demande validée par le président</Text>
+                      <Text style={styles.badgeSub}>Réponse sous 48 heures (notification par email).</Text>
+                    </View>
+                  </View>
+                )}
 
-            <InputField icon="🔒" placeholder="Mot de passe" value={form.password}
-              onChangeText={v => update('password', v)} secureTextEntry />
+                {mode === 'demande' && (
+                  <>
+                    <InputField
+                      icon="👤"
+                      placeholder="Nom complet *"
+                      value={form.nom}
+                      onChangeText={(v) => update('nom', v)}
+                    />
+                    <InputField
+                      icon="📞"
+                      placeholder="+228 90 XX XX XX"
+                      value={form.telephone}
+                      onChangeText={(v) => update('telephone', v)}
+                      keyboardType="phone-pad"
+                    />
+                    <InputField
+                      icon="🏛️"
+                      placeholder="Coopérative"
+                      value="CTA de Broukou"
+                      editable={false}
+                    />
+                    <InputField
+                      icon="💬"
+                      placeholder="Pourquoi voulez-vous rejoindre la coopérative ? (optionnel)"
+                      value={form.message}
+                      onChangeText={(v) => update('message', v)}
+                      multiline
+                    />
+                  </>
+                )}
 
-            {mode === 'inscription' && (
-              <InputField icon="🔒" placeholder="Confirmer le mot de passe" value={form.confirmPassword}
-                onChangeText={v => update('confirmPassword', v)} secureTextEntry />
-            )}
+                <InputField
+                  icon="✉️"
+                  placeholder="votre@email.com"
+                  value={form.email}
+                  onChangeText={v => update('email', v)}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
 
-            <TouchableOpacity
-              style={styles.btn}
-              onPress={mode === 'connexion' ? handleConnexion : handleInscription}
-              disabled={loading}
-            >
-              {loading
-                ? <ActivityIndicator color="#fff" />
-                : <Text style={styles.btnText}>
-                    {mode === 'connexion' ? 'Se Connecter →' : 'Rejoindre la coopérative →'}
+                {mode === 'connexion' && (
+                  <InputField
+                    icon="🔒"
+                    placeholder="Mot de passe"
+                    value={form.password}
+                    onChangeText={v => update('password', v)}
+                    secureTextEntry
+                  />
+                )}
+
+                <TouchableOpacity
+                  style={styles.btn}
+                  onPress={mode === 'connexion' ? handleConnexion : handleDemandeCompte}
+                  disabled={loading}
+                >
+                  {loading
+                    ? <ActivityIndicator color="#fff" />
+                    : <Text style={styles.btnText}>
+                      {mode === 'connexion' ? 'Se Connecter →' : '📨 Envoyer ma demande'}
+                    </Text>
+                  }
+                </TouchableOpacity>
+
+                <View style={styles.blockchainBadge}>
+                  <Text style={styles.blockchainText}>✅ Certifié CoopLedger · Polygon Blockchain</Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <View style={styles.successCard}>
+                  <Text style={styles.successTitle}>✅ Demande envoyée avec succès !</Text>
+                  <Text style={styles.successText}>
+                    Le président de la coopérative examinera votre demande sous 48 heures.{"\n"}
+                    Vous serez notifié par email.
                   </Text>
-              }
-            </TouchableOpacity>
+                </View>
 
-            <View style={styles.blockchainBadge}>
-              <Text style={styles.blockchainText}>✅ Certifié CoopLedger · Polygon Blockchain</Text>
-            </View>
+                <TouchableOpacity
+                  style={[styles.btn, { marginTop: 12 }]}
+                  onPress={() => setMode('connexion')}
+                >
+                  <Text style={styles.btnText}>Retour à la connexion</Text>
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -192,4 +298,13 @@ const styles = StyleSheet.create({
   blockchainBadge: { alignItems: 'center', backgroundColor: '#dcfce7', borderRadius: 20,
     paddingVertical: 8, paddingHorizontal: 16, borderWidth: 1, borderColor: '#86efac' },
   blockchainText: { fontSize: 12, color: GREEN, fontWeight: '600' },
+  successCard: {
+    backgroundColor: GREEN_LIGHT,
+    borderWidth: 1,
+    borderColor: '#86efac',
+    borderRadius: 18,
+    padding: 16,
+  },
+  successTitle: { fontSize: 16, fontWeight: '900', color: '#166534' },
+  successText: { marginTop: 8, color: '#15803d', fontWeight: '700', lineHeight: 20 },
 });

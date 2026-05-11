@@ -7,6 +7,7 @@ import { useAuth } from './src/hooks/useAuth';
 import { useNotifications } from './src/hooks/useNotifications';
 import LoginScreen from './src/screens/LoginScreen';
 import AppNavigator from './src/navigation/AppNavigator';
+import InstitutionDashboard from './src/screens/InstitutionDashboard';
 
 const navigationRef = createNavigationContainerRef();
 
@@ -43,6 +44,8 @@ export default function App() {
         </View>
       ) : !user ? (
         <LoginScreen />
+      ) : userData?.role === 'institution' ? (
+        <InstitutionDashboard userData={userData} />
       ) : (
         <NavigationContainer ref={navigationRef}>
           <AppNavigator userData={userData} />

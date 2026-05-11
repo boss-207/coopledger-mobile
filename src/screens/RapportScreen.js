@@ -70,11 +70,6 @@ function getMonthLabel(date) {
   return date.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
 }
 
-function getWeekBucketOfMonth(date) {
-  const day = date.getDate();
-  return Math.min(4, Math.floor((day - 1) / 7));
-}
-
 function normalizeTx(docData) {
   const date = toDateSafe(docData.date);
   return {
@@ -103,20 +98,128 @@ function normalizeVote(docData) {
   };
 }
 
-function BarRow({ label, entrees, depenses, maxValue }) {
-  const entreeWidth = maxValue > 0 ? `${Math.max(8, (entrees / maxValue) * 100)}%` : '8%';
-  const depenseWidth = maxValue > 0 ? `${Math.max(8, (depenses / maxValue) * 100)}%` : '8%';
+function DonutChart({ revenus, depenses }) {
+  const total = revenus + depenses;
+
+  if (total === 0) {
+    return (
+      <View style={donutStyles.emptyContainer}>
+        <Text style={donutStyles.emptyText}>
+          Aucune donnée pour ce mois
+        </Text>
+      </View>
+    );
+  }
+
+  const pctRevenus = Math.round((revenus / total) * 100);
+  const pctDepenses = 100 - pctRevenus;
+  const rotationDeg = (pctRevenus / 100) * 360;
 
   return (
-    <View style={styles.barRow}>
-      <Text style={styles.barLabel}>{label}</Text>
-      <View style={styles.barLane}>
-        <View style={[styles.bar, styles.barEntree, { width: entreeWidth }]} />
-        <Text style={styles.barValue}>{(entrees || 0).toLocaleString('fr-FR')}</Text>
+    <View style={donutStyles.wrapper}>
+      <View style={donutStyles.outerCircle}>
+        <View
+          style={[
+            donutStyles.halfLeft,
+            {
+              backgroundColor: '#15803d',
+              transform: [{ rotate: `${rotationDeg}deg` }],
+            },
+          ]}
+        />
+        <View
+          style={[
+            donutStyles.halfRight,
+            { backgroundColor: '#dc2626' },
+          ]}
+        />
+
+        <View style={donutStyles.innerCircle}>
+          <Text style={donutStyles.centerPercent}>
+            {pctRevenus}%
+          </Text>
+          <Text style={donutStyles.centerLabel}>
+            Entrées
+          </Text>
+        </View>
       </View>
-      <View style={styles.barLane}>
-        <View style={[styles.bar, styles.barDepense, { width: depenseWidth }]} />
-        <Text style={styles.barValue}>{(depenses || 0).toLocaleString('fr-FR')}</Text>
+
+      <View style={donutStyles.legend}>
+        <View style={donutStyles.legendRow}>
+          <View
+            style={[
+              donutStyles.legendDot,
+              { backgroundColor: '#15803d' },
+            ]}
+          />
+          <View>
+            <Text style={donutStyles.legendLabel}>
+              Entrées
+            </Text>
+            <Text style={donutStyles.legendValue}>
+              +{revenus.toLocaleString('fr-FR')} FCFA
+            </Text>
+          </View>
+          <Text style={donutStyles.legendPct}>
+            {pctRevenus}%
+          </Text>
+        </View>
+
+        <View
+          style={[
+            donutStyles.legendRow,
+            { marginTop: 12 },
+          ]}
+        >
+          <View
+            style={[
+              donutStyles.legendDot,
+              { backgroundColor: '#dc2626' },
+            ]}
+          />
+          <View>
+            <Text style={donutStyles.legendLabel}>
+              Dépenses
+            </Text>
+            <Text
+              style={[
+                donutStyles.legendValue,
+                { color: '#dc2626' },
+              ]}
+            >
+              -{depenses.toLocaleString('fr-FR')} FCFA
+            </Text>
+          </View>
+          <Text
+            style={[
+              donutStyles.legendPct,
+              { color: '#dc2626' },
+            ]}
+          >
+            {pctDepenses}%
+          </Text>
+        </View>
+
+        <View style={donutStyles.separator} />
+
+        <View style={donutStyles.soldeRow}>
+          <Text style={donutStyles.soldeLabel}>
+            Solde net du mois
+          </Text>
+          <Text
+            style={[
+              donutStyles.soldeValue,
+              {
+                color: (revenus - depenses) >= 0
+                  ? '#15803d'
+                  : '#dc2626',
+              },
+            ]}
+          >
+            {(revenus - depenses) >= 0 ? '+' : ''}
+            {(revenus - depenses).toLocaleString('fr-FR')} FCFA
+          </Text>
+        </View>
       </View>
     </View>
   );
@@ -225,25 +328,6 @@ export default function RapportScreen() {
         )
       : 0;
 
-    const weekly = Array.from({ length: 5 }, (_, i) => ({
-      label: `Semaine ${i + 1}`,
-      entrees: 0,
-      depenses: 0,
-    }));
-
-    txValidees.forEach((t) => {
-      if (!t.date) return;
-      const week = getWeekBucketOfMonth(t.date);
-      const isEntree = t.type === 'entree' || t.type === 'revenu';
-      if (isEntree) weekly[week].entrees += t.montant;
-      else weekly[week].depenses += t.montant;
-    });
-
-    const maxBarValue = Math.max(
-      1,
-      ...weekly.map((w) => Math.max(w.entrees, w.depenses))
-    );
-
     return {
       monthLabel,
       txMonth,
@@ -257,8 +341,6 @@ export default function RapportScreen() {
       votesRejetes,
       votesAnnules,
       participationPct,
-      weekly,
-      maxBarValue,
     };
   }, [selectedMonthMode, transactions, votes]);
 
@@ -385,27 +467,13 @@ Destinataires: IFAD, Banques partenaires, Ministère de l'Agriculture.`;
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Entrées vs dépenses par semaine</Text>
-        <Text style={styles.sectionSubtitle}>Données en temps réel du mois sélectionné</Text>
-        <View style={styles.legendRow}>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: GREEN }]} />
-            <Text style={styles.legendText}>Entrées</Text>
-          </View>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: RED }]} />
-            <Text style={styles.legendText}>Dépenses</Text>
-          </View>
-        </View>
-        {computed.weekly.map((w) => (
-          <BarRow
-            key={w.label}
-            label={w.label}
-            entrees={w.entrees}
-            depenses={w.depenses}
-            maxValue={computed.maxBarValue}
-          />
-        ))}
+        <Text style={styles.sectionTitle}>
+          📊 Répartition Entrées / Dépenses
+        </Text>
+        <DonutChart
+          revenus={computed.totalEntrees}
+          depenses={computed.totalDepenses}
+        />
       </View>
 
       <View style={styles.section}>
@@ -510,31 +578,6 @@ const styles = StyleSheet.create({
   cardValue: { fontSize: 20, fontWeight: '900', color: '#111827', marginTop: 4 },
   cardValueMain: { fontSize: 24, fontWeight: '900', color: '#fff', marginTop: 6 },
 
-  legendRow: { flexDirection: 'row', gap: 18, marginBottom: 12 },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  legendDot: { width: 10, height: 10, borderRadius: 5 },
-  legendText: { fontSize: 12, color: '#4b5563', fontWeight: '600' },
-  barRow: { marginBottom: 12 },
-  barLabel: { fontSize: 12, color: '#374151', fontWeight: '700', marginBottom: 6 },
-  barLane: {
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#f3f4f6',
-    marginBottom: 6,
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  bar: { height: '100%' },
-  barEntree: { backgroundColor: '#15803d' },
-  barDepense: { backgroundColor: '#dc2626' },
-  barValue: {
-    position: 'absolute',
-    right: 8,
-    fontSize: 11,
-    color: '#1f2937',
-    fontWeight: '700',
-  },
-
   emptyText: { fontSize: 13, color: '#6b7280', paddingVertical: 8 },
   txRow: {
     flexDirection: 'row',
@@ -585,4 +628,133 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   emailButtonText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+});
+
+const donutStyles = StyleSheet.create({
+  wrapper: {
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  emptyContainer: {
+    padding: 32,
+    alignItems: 'center',
+  },
+  emptyText: {
+    color: '#9ca3af',
+    fontSize: 14,
+  },
+  outerCircle: {
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    overflow: 'hidden',
+    backgroundColor: '#dc2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+  },
+  halfLeft: {
+    position: 'absolute',
+    width: 100,
+    height: 200,
+    top: 0,
+    left: 0,
+    borderTopLeftRadius: 100,
+    borderBottomLeftRadius: 100,
+  },
+  halfRight: {
+    position: 'absolute',
+    width: 100,
+    height: 200,
+    top: 0,
+    right: 0,
+    borderTopRightRadius: 100,
+    borderBottomRightRadius: 100,
+  },
+  innerCircle: {
+    position: 'absolute',
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+  },
+  centerPercent: {
+    fontSize: 30,
+    fontWeight: '800',
+    color: '#15803d',
+    lineHeight: 34,
+  },
+  centerLabel: {
+    fontSize: 11,
+    color: '#6b7280',
+    fontWeight: '500',
+  },
+  legend: {
+    marginTop: 24,
+    width: '100%',
+    paddingHorizontal: 8,
+  },
+  legendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 12,
+  },
+  legendDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    marginRight: 12,
+  },
+  legendLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  legendValue: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#15803d',
+    marginTop: 2,
+  },
+  legendPct: {
+    marginLeft: 'auto',
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#15803d',
+  },
+  separator: {
+    height: 1,
+    backgroundColor: '#e5e7eb',
+    marginVertical: 14,
+    marginHorizontal: 4,
+  },
+  soldeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 4,
+    paddingBottom: 4,
+  },
+  soldeLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  soldeValue: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
 });

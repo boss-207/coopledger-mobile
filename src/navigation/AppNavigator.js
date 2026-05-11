@@ -9,6 +9,7 @@ import VoteScreen from '../screens/VoteScreen';
 import HistoriqueScreen from '../screens/HistoriqueScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import NouvelleTransactionScreen from '../screens/NouvelleTransactionScreen';
+import MainAMainScreen from '../screens/MainAMainScreen';
 import RapportScreen from '../screens/RapportScreen';
 import MembresScreen from '../screens/MembresScreen';
 
@@ -60,6 +61,12 @@ function DashboardStack({ userData }) {
         }}
       >
         {props => <NouvelleTransactionScreen {...props} userData={userData} />}
+      </Stack.Screen>
+      <Stack.Screen
+        name="MainAMain"
+        options={{ headerShown: false }}
+      >
+        {props => <MainAMainScreen {...props} userData={userData} />}
       </Stack.Screen>
     </Stack.Navigator>
   );

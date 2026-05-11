@@ -23,7 +23,10 @@ import {
   setDoc,
   Timestamp,
 } from 'firebase/firestore';
-import { db } from '../config/firebase';
+import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import { ethers } from 'ethers';
+import { auth, db } from '../config/firebase';
 import { useVotes } from '../hooks/useBlockchain';
 import {
   getNombreMembres,
@@ -37,12 +40,15 @@ const ROLE_COLORS = {
   president: '#7c3aed',
   tresorier: '#2563eb',
   membre: '#15803d',
+  institution: '#14532d',
 };
 const ROLE_LABELS = {
   president: 'Président',
   tresorier: 'Trésorier',
   membre: 'Membre',
+  institution: 'Institution',
 };
+const INSTITUTION_TYPES = ['Banque', 'Organisation internationale', 'Ministère', 'ONG', 'Autre'];
 
 function formatDate(value) {
   const d = value?.toDate ? value.toDate() : new Date(value);
@@ -66,6 +72,27 @@ function dotCouleurStatut(statut) {
   if (statut === 'exclu') return '#dc2626';
   if (statut === 'inactif') return '#6b7280';
   return '#22c55e';
+}
+
+function formatDateHeure(value) {
+  const d = value?.toDate ? value.toDate() : new Date(value);
+  if (Number.isNaN(d.getTime())) return '-';
+  return d.toLocaleString('fr-FR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function generateTempPassword(length = 8) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let pwd = '';
+  for (let i = 0; i < length; i += 1) {
+    pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return pwd;
 }
 
 function MemberRow({
@@ -156,6 +183,19 @@ export default function MembresScreen({ userData }) {
 
   const [newNom, setNewNom] = useState('');
   const [newEmail, setNewEmail] = useState('');
+  const [demandesEnAttente, setDemandesEnAttente] = useState([]);
+  const [validationModalVisible, setValidationModalVisible] = useState(false);
+  const [demandeAValider, setDemandeAValider] = useState(null);
+  const [roleValidation, setRoleValidation] = useState('membre');
+  const [tempPassword, setTempPassword] = useState('');
+  const [refusModalVisible, setRefusModalVisible] = useState(false);
+  const [demandeARefuser, setDemandeARefuser] = useState(null);
+  const [raisonRefus, setRaisonRefus] = useState('');
+  const [institutionModalVisible, setInstitutionModalVisible] = useState(false);
+  const [institutionNom, setInstitutionNom] = useState('');
+  const [institutionEmail, setInstitutionEmail] = useState('');
+  const [institutionType, setInstitutionType] = useState('Banque');
+  const [institutionTempPassword, setInstitutionTempPassword] = useState('');
 
   // Transferts par vote (président uniquement)
   const [modalPickPresident, setModalPickPresident] = useState(false);
@@ -231,6 +271,35 @@ export default function MembresScreen({ userData }) {
     };
   }, [coopId]);
 
+  useEffect(() => {
+    if (!canManage) {
+      setDemandesEnAttente([]);
+      return undefined;
+    }
+    const demandesQ = query(
+      collection(db, 'demandes_compte'),
+      where('cooperativeId', '==', coopId),
+      where('statut', '==', 'en_attente')
+    );
+    const unsubDemandes = onSnapshot(
+      demandesQ,
+      (snap) => {
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => {
+            const at = a?.dateDemande?.toDate ? a.dateDemande.toDate().getTime() : 0;
+            const bt = b?.dateDemande?.toDate ? b.dateDemande.toDate().getTime() : 0;
+            return bt - at;
+          });
+        setDemandesEnAttente(list);
+      },
+      () => {
+        setDemandesEnAttente([]);
+      }
+    );
+    return () => unsubDemandes();
+  }, [canManage, coopId]);
+
   const sortedMembers = useMemo(() => {
     const roleOrder = { president: 0, tresorier: 1, membre: 2 };
     return [...users].sort((a, b) => {
@@ -239,6 +308,11 @@ export default function MembresScreen({ userData }) {
       return (a.nom || '').localeCompare(b.nom || '', 'fr');
     });
   }, [users]);
+
+  const institutions = useMemo(
+    () => sortedMembers.filter((m) => m.role === 'institution'),
+    [sortedMembers]
+  );
 
   /** Seuls statut « actif » (ou profil sans statut = ancien script) comptent pour quorum / transferts. */
   const activeMembers = useMemo(
@@ -253,6 +327,7 @@ export default function MembresScreen({ userData }) {
 
   const displayedMembers = useMemo(() => {
     return sortedMembers.filter((m) => {
+      if (m.role === 'institution') return false;
       const s = m.statut;
       if (memberFilter === 'tous') return true;
       if (memberFilter === 'actifs') return s === 'actif' || s === undefined || s === null;
@@ -316,6 +391,203 @@ export default function MembresScreen({ userData }) {
       Alert.alert('Succès', 'Membre ajouté avec succès.');
     } catch {
       Alert.alert('Erreur', 'Impossible d’ajouter le membre pour le moment.');
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  function ouvrirAjoutInstitution() {
+    setInstitutionNom('');
+    setInstitutionEmail('');
+    setInstitutionType('Banque');
+    setInstitutionTempPassword(generateTempPassword(8));
+    setInstitutionModalVisible(true);
+  }
+
+  function copierMotDePasseInstitution() {
+    if (!institutionTempPassword) return;
+    Alert.alert('Mot de passe temporaire', `${institutionTempPassword}\n\nCopiez-le manuellement.`);
+  }
+
+  async function handleAddInstitution() {
+    if (!institutionNom.trim() || !institutionEmail.trim()) {
+      Alert.alert('Erreur', 'Nom et email sont obligatoires.');
+      return;
+    }
+    setActionLoading(true);
+    try {
+      let uidCree = null;
+      try {
+        const functions = getFunctions(undefined, 'europe-west1');
+        const createInstitution = httpsCallable(functions, 'creerCompteInstitution');
+        const res = await createInstitution({
+          nom: institutionNom.trim(),
+          email: institutionEmail.trim().toLowerCase(),
+          motDePasseTemporaire: institutionTempPassword,
+        });
+        uidCree = res?.data?.uid || null;
+      } catch (e) {
+        const continuerFallback = await new Promise((resolve) => {
+          Alert.alert(
+            'Création côté client',
+            'La Function de création institution est indisponible. Continuer depuis le client ? Le président sera déconnecté.',
+            [
+              { text: 'Annuler', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Continuer', style: 'destructive', onPress: () => resolve(true) },
+            ]
+          );
+        });
+        if (!continuerFallback) return;
+        const createRes = await createUserWithEmailAndPassword(
+          auth,
+          institutionEmail.trim().toLowerCase(),
+          institutionTempPassword
+        );
+        uidCree = createRes?.user?.uid || null;
+      }
+
+      if (!uidCree) throw new Error('Impossible de créer le compte institution.');
+
+      await setDoc(doc(db, 'users', uidCree), {
+        uid: uidCree,
+        nom: institutionNom.trim(),
+        email: institutionEmail.trim().toLowerCase(),
+        role: 'institution',
+        typeInstitution: institutionType,
+        cooperativeId: 'broukou',
+        statut: 'actif',
+        dateInscription: new Date(),
+        walletAddress: '',
+        creePar: userData?.uid || null,
+      });
+
+      setInstitutionModalVisible(false);
+      Alert.alert('Succès', `🏦 ${institutionNom.trim()} ajouté avec succès !`);
+      if (auth.currentUser?.uid !== userData?.uid) {
+        await signOut(auth);
+      }
+    } catch (e) {
+      Alert.alert('Erreur', e?.message || 'Création institution impossible.');
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  function ouvrirValidationDemande(demande) {
+    setDemandeAValider(demande);
+    setRoleValidation('membre');
+    setTempPassword(generateTempPassword(8));
+    setValidationModalVisible(true);
+  }
+
+  function ouvrirRefusDemande(demande) {
+    setDemandeARefuser(demande);
+    setRaisonRefus('');
+    setRefusModalVisible(true);
+  }
+
+  function copyTempPassword() {
+    if (!tempPassword) return;
+    Alert.alert(
+      'Mot de passe temporaire',
+      `${tempPassword}\n\nCopiez-le manuellement et transmettez-le au membre.`
+    );
+  }
+
+  async function confirmerRefusDemande() {
+    if (!demandeARefuser) return;
+    if (!raisonRefus.trim()) {
+      Alert.alert('Champ requis', 'Veuillez saisir la raison du refus.');
+      return;
+    }
+    setActionLoading(true);
+    try {
+      await updateDoc(doc(db, 'demandes_compte', demandeARefuser.id), {
+        statut: 'refusee',
+        raisonRefus: raisonRefus.trim(),
+      });
+      setRefusModalVisible(false);
+      setDemandeARefuser(null);
+      setRaisonRefus('');
+      Alert.alert('Succès', `Demande de ${demandeARefuser.nom || 'ce membre'} refusée.`);
+    } catch (e) {
+      Alert.alert('Erreur', e?.message || 'Impossible de refuser la demande.');
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function confirmerValidationDemande() {
+    if (!demandeAValider) return;
+    const roleChoisi = roleValidation || 'membre';
+    const demande = demandeAValider;
+    setActionLoading(true);
+    try {
+      const wallet = ethers.Wallet.createRandom();
+      let uidCree = null;
+      let utiliseFallbackClient = false;
+      try {
+        const functions = getFunctions(undefined, 'europe-west1');
+        const validerDemandeCompte = httpsCallable(functions, 'validerDemandeCompte');
+        const res = await validerDemandeCompte({
+          email: String(demande.email || '').toLowerCase().trim(),
+          motDePasseTemporaire: tempPassword,
+          nom: demande.nom || '',
+        });
+        uidCree = res?.data?.uid || res?.data?.user?.uid || null;
+      } catch (e) {
+        const continuerFallback = await new Promise((resolve) => {
+          Alert.alert(
+            'Function indisponible',
+            'La Function validerDemandeCompte est indisponible. Continuer avec la création côté client ? Le président sera déconnecté momentanément.',
+            [
+              { text: 'Annuler', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Continuer', style: 'destructive', onPress: () => resolve(true) },
+            ]
+          );
+        });
+        if (!continuerFallback) return;
+        const createRes = await createUserWithEmailAndPassword(
+          auth,
+          String(demande.email || '').toLowerCase().trim(),
+          tempPassword
+        );
+        utiliseFallbackClient = true;
+        uidCree = createRes?.user?.uid || null;
+        if (!uidCree) throw new Error('Création Auth impossible.');
+      }
+
+      if (!uidCree) throw new Error('UID non reçu après création Auth.');
+
+      const userRef = doc(db, 'users', uidCree);
+      await setDoc(userRef, {
+        uid: uidCree,
+        nom: demande.nom || '',
+        email: String(demande.email || '').toLowerCase().trim(),
+        telephone: demande.telephone || '',
+        role: roleChoisi,
+        cooperativeId: 'broukou',
+        statut: 'actif',
+        dateInscription: new Date(),
+        walletAddress: wallet.address,
+        walletPrivateKey: wallet.privateKey,
+      });
+
+      await updateDoc(doc(db, 'demandes_compte', demande.id), {
+        statut: 'validee',
+        walletAddress: wallet.address,
+        uid: uidCree,
+        roleChoisi,
+      });
+
+      setValidationModalVisible(false);
+      setDemandeAValider(null);
+      Alert.alert('Succès', `✅ ${demande.nom || 'Le membre'} a été ajouté comme ${ROLE_LABELS[roleChoisi] || roleChoisi} !`);
+      if (utiliseFallbackClient) {
+        await signOut(auth);
+      }
+    } catch (e) {
+      Alert.alert('Erreur', e?.message || 'Validation impossible.');
     } finally {
       setActionLoading(false);
     }
@@ -686,6 +958,80 @@ export default function MembresScreen({ userData }) {
               </View>
             </View>
 
+            {canManage && demandesEnAttente.length > 0 ? (
+              <View style={styles.pendingSection}>
+                <View style={styles.pendingHeader}>
+                  <Text style={styles.pendingHeaderTitle}>
+                    👤 Demandes en attente ({demandesEnAttente.length})
+                  </Text>
+                  <View style={styles.pendingCountBadge}>
+                    <Text style={styles.pendingCountText}>{demandesEnAttente.length}</Text>
+                  </View>
+                </View>
+
+                {demandesEnAttente.map((demande) => (
+                  <View key={demande.id} style={styles.pendingCard}>
+                    <View style={styles.pendingTopRow}>
+                      <View style={styles.pendingAvatar}>
+                        <Text style={styles.pendingAvatarText}>{getInitiales(demande.nom)}</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.pendingName}>{demande.nom || 'Demandeur'}</Text>
+                        <Text style={styles.pendingMeta}>{demande.email || '-'}</Text>
+                        <Text style={styles.pendingMeta}>{demande.telephone || '-'}</Text>
+                        <Text style={styles.pendingMeta}>
+                          Demandé le {formatDateHeure(demande.dateDemande)}
+                        </Text>
+                      </View>
+                    </View>
+                    {demande.message ? (
+                      <View style={styles.pendingMessageBox}>
+                        <Text style={styles.pendingMessageLabel}>Message</Text>
+                        <Text style={styles.pendingMessageText}>{demande.message}</Text>
+                      </View>
+                    ) : null}
+
+                    <View style={styles.pendingActions}>
+                      <TouchableOpacity
+                        style={styles.pendingValidateBtn}
+                        onPress={() => ouvrirValidationDemande(demande)}
+                        disabled={actionLoading}
+                      >
+                        <Text style={styles.pendingValidateText}>✅ Valider</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.pendingRefuseBtn}
+                        onPress={() => ouvrirRefusDemande(demande)}
+                        disabled={actionLoading}
+                      >
+                        <Text style={styles.pendingRefuseText}>❌ Refuser</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+
+            {institutions.length > 0 ? (
+              <View style={styles.institutionsSection}>
+                <Text style={styles.institutionsTitle}>🏦 Institutions</Text>
+                {institutions.map((inst) => (
+                  <View key={inst.id} style={styles.institutionCard}>
+                    <View style={styles.pendingAvatar}>
+                      <Text style={styles.pendingAvatarText}>{getInitiales(inst.nom)}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.pendingName}>{inst.nom || 'Institution'}</Text>
+                      <Text style={styles.pendingMeta}>{inst.email || '-'}</Text>
+                      <View style={styles.institutionTypeBadge}>
+                        <Text style={styles.institutionTypeText}>{inst.typeInstitution || 'Autre'}</Text>
+                      </View>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+
             <View style={styles.filterRow}>
               {[
                 { key: 'actifs', label: 'Actifs' },
@@ -834,9 +1180,14 @@ export default function MembresScreen({ userData }) {
       />
 
       {canManage && (
-        <TouchableOpacity style={styles.floatingBtn} onPress={() => setAddModalVisible(true)}>
-          <Text style={styles.floatingBtnText}>➕ Ajouter un membre</Text>
-        </TouchableOpacity>
+        <View style={styles.floatingGroup}>
+          <TouchableOpacity style={styles.floatingBtnSecondary} onPress={ouvrirAjoutInstitution}>
+            <Text style={styles.floatingBtnText}>🏦 Ajouter une institution</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.floatingBtn} onPress={() => setAddModalVisible(true)}>
+            <Text style={styles.floatingBtnText}>➕ Ajouter un membre</Text>
+          </TouchableOpacity>
+        </View>
       )}
 
       <Modal visible={addModalVisible} transparent animationType="slide">
@@ -862,6 +1213,60 @@ export default function MembresScreen({ userData }) {
                 <Text style={styles.cancelText}>Annuler</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.confirmBtn} onPress={handleAddMember}>
+                <Text style={styles.confirmText}>Créer</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={institutionModalVisible} transparent animationType="slide">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Ajouter une institution</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Nom de l'institution (ex: IFAD Togo)"
+              value={institutionNom}
+              onChangeText={setInstitutionNom}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Email de connexion"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              value={institutionEmail}
+              onChangeText={setInstitutionEmail}
+            />
+
+            <Text style={styles.validationLabel}>Type d'institution</Text>
+            <View style={styles.typeGrid}>
+              {INSTITUTION_TYPES.map((type) => (
+                <TouchableOpacity
+                  key={type}
+                  style={[styles.typeChip, institutionType === type && styles.typeChipActive]}
+                  onPress={() => setInstitutionType(type)}
+                >
+                  <Text style={[styles.typeChipText, institutionType === type && styles.typeChipTextActive]}>
+                    {type}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={styles.validationLabel}>Mot de passe temporaire</Text>
+            <View style={styles.tempPasswordRow}>
+              <TextInput style={styles.tempPasswordInput} value={institutionTempPassword} editable={false} />
+              <TouchableOpacity style={styles.tempCopyBtn} onPress={copierMotDePasseInstitution}>
+                <Text style={styles.tempCopyText}>Copier</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setInstitutionModalVisible(false)}>
+                <Text style={styles.cancelText}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.confirmBtn} onPress={handleAddInstitution}>
                 <Text style={styles.confirmText}>Créer</Text>
               </TouchableOpacity>
             </View>
@@ -970,6 +1375,101 @@ export default function MembresScreen({ userData }) {
         </View>
       </Modal>
 
+      <Modal visible={validationModalVisible} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Valider {demandeAValider?.nom || ''}</Text>
+
+            <Text style={styles.validationLabel}>Rôle à attribuer</Text>
+            <View style={styles.validationRoles}>
+              <TouchableOpacity
+                style={[styles.validationRoleChip, roleValidation === 'membre' && styles.validationRoleChipActive]}
+                onPress={() => setRoleValidation('membre')}
+              >
+                <Text style={[styles.validationRoleText, roleValidation === 'membre' && styles.validationRoleTextActive]}>
+                  • Membre
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.validationRoleChip, roleValidation === 'tresorier' && styles.validationRoleChipActive]}
+                onPress={() => setRoleValidation('tresorier')}
+              >
+                <Text style={[styles.validationRoleText, roleValidation === 'tresorier' && styles.validationRoleTextActive]}>
+                  • Trésorier
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.validationLabel}>Mot de passe temporaire</Text>
+            <View style={styles.tempPasswordRow}>
+              <TextInput
+                style={styles.tempPasswordInput}
+                value={tempPassword}
+                editable={false}
+              />
+              <TouchableOpacity style={styles.tempCopyBtn} onPress={copyTempPassword}>
+                <Text style={styles.tempCopyText}>Copier</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.btnValidationConfirm, actionLoading && { opacity: 0.6 }]}
+              onPress={confirmerValidationDemande}
+              disabled={actionLoading}
+            >
+              <Text style={styles.btnValidationConfirmText}>✅ Confirmer la validation</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.cancelBtn, { marginTop: 10 }]}
+              onPress={() => {
+                if (actionLoading) return;
+                setValidationModalVisible(false);
+                setDemandeAValider(null);
+              }}
+            >
+              <Text style={styles.cancelText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={refusModalVisible} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Refuser {demandeARefuser?.nom || ''}</Text>
+            <TextInput
+              style={styles.excludeReasonInput}
+              placeholder="Raison du refus"
+              value={raisonRefus}
+              onChangeText={setRaisonRefus}
+              multiline
+              editable={!actionLoading}
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.cancelBtn}
+                onPress={() => {
+                  if (actionLoading) return;
+                  setRefusModalVisible(false);
+                  setDemandeARefuser(null);
+                  setRaisonRefus('');
+                }}
+              >
+                <Text style={styles.cancelText}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.pendingRefuseBtn, actionLoading && { opacity: 0.6 }]}
+                onPress={confirmerRefusDemande}
+                disabled={actionLoading}
+              >
+                <Text style={styles.pendingRefuseText}>Confirmer le refus</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={excludeModalVisible} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
@@ -1058,6 +1558,98 @@ const styles = StyleSheet.create({
   statValue: { fontSize: 20, fontWeight: '900', color: '#111827' },
   statValueSmall: { fontSize: 13, fontWeight: '800', color: '#111827' },
   sectionTitle: { fontSize: 17, fontWeight: '900', color: '#111827', marginBottom: 10 },
+  pendingSection: { marginBottom: 14 },
+  pendingHeader: {
+    backgroundColor: '#ffedd5',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#fdba74',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  pendingHeaderTitle: { color: '#9a3412', fontWeight: '900', fontSize: 14 },
+  pendingCountBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#dc2626',
+  },
+  pendingCountText: { color: '#fff', fontWeight: '900', fontSize: 12 },
+  pendingCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+    marginBottom: 8,
+  },
+  pendingTopRow: { flexDirection: 'row', gap: 10 },
+  pendingAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pendingAvatarText: { color: GREEN_DARK, fontWeight: '900' },
+  pendingName: { fontSize: 14, fontWeight: '900', color: '#111827' },
+  pendingMeta: { marginTop: 2, color: '#6b7280', fontSize: 12 },
+  pendingMessageBox: {
+    marginTop: 10,
+    backgroundColor: '#f9fafb',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    padding: 10,
+  },
+  pendingMessageLabel: { fontSize: 11, color: '#6b7280', fontWeight: '800', marginBottom: 4 },
+  pendingMessageText: { color: '#111827', fontWeight: '600', fontSize: 12, lineHeight: 18 },
+  pendingActions: { marginTop: 10, flexDirection: 'row', gap: 8 },
+  pendingValidateBtn: {
+    flex: 1,
+    backgroundColor: GREEN,
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  pendingValidateText: { color: '#fff', fontWeight: '900', fontSize: 12 },
+  pendingRefuseBtn: {
+    flex: 1,
+    backgroundColor: '#b91c1c',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  pendingRefuseText: { color: '#fff', fontWeight: '900', fontSize: 12 },
+  institutionsSection: { marginBottom: 14 },
+  institutionsTitle: { fontSize: 16, fontWeight: '900', color: GREEN_DARK, marginBottom: 8 },
+  institutionCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#d1fae5',
+    padding: 10,
+    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  institutionTypeBadge: {
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    backgroundColor: '#ecfdf5',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  institutionTypeText: { color: GREEN_DARK, fontWeight: '800', fontSize: 11 },
 
   filterRow: {
     flexDirection: 'row',
@@ -1208,9 +1800,6 @@ const styles = StyleSheet.create({
   btnTresText: { color: '#fff', fontWeight: '900' },
 
   floatingBtn: {
-    position: 'absolute',
-    bottom: 24,
-    right: 16,
     backgroundColor: GREEN,
     borderRadius: 26,
     paddingHorizontal: 16,
@@ -1219,6 +1808,23 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.2,
     elevation: 6,
+  },
+  floatingGroup: {
+    position: 'absolute',
+    bottom: 24,
+    right: 16,
+    gap: 8,
+    alignItems: 'flex-end',
+  },
+  floatingBtnSecondary: {
+    backgroundColor: GREEN_DARK,
+    borderRadius: 22,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    elevation: 4,
   },
   floatingBtnText: { color: '#fff', fontWeight: '800', fontSize: 13 },
 
@@ -1245,6 +1851,61 @@ const styles = StyleSheet.create({
   cancelText: { color: '#374151', fontWeight: '700' },
   confirmBtn: { backgroundColor: GREEN, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10 },
   confirmText: { color: '#fff', fontWeight: '800' },
+  validationLabel: { fontSize: 12, color: '#374151', fontWeight: '800', marginBottom: 6 },
+  validationRoles: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  validationRoleChip: {
+    flex: 1,
+    borderWidth: 1.5,
+    borderColor: '#d1d5db',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  validationRoleChipActive: {
+    borderColor: GREEN,
+    backgroundColor: '#f0fdf4',
+  },
+  validationRoleText: { color: '#374151', fontWeight: '800' },
+  validationRoleTextActive: { color: GREEN_DARK },
+  tempPasswordRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
+  tempPasswordInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    backgroundColor: '#f3f4f6',
+    color: '#111827',
+    fontWeight: '800',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  tempCopyBtn: {
+    backgroundColor: '#e5e7eb',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tempCopyText: { color: '#374151', fontWeight: '900', fontSize: 12 },
+  btnValidationConfirm: {
+    backgroundColor: GREEN,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  btnValidationConfirmText: { color: '#fff', fontWeight: '900' },
+  typeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  typeChip: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#fff',
+  },
+  typeChipActive: { borderColor: GREEN, backgroundColor: '#f0fdf4' },
+  typeChipText: { color: '#374151', fontWeight: '700', fontSize: 12 },
+  typeChipTextActive: { color: GREEN_DARK },
 
   roleOption: {
     borderWidth: 1,
