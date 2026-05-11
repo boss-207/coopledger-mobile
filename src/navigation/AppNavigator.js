@@ -9,6 +9,8 @@ import VoteScreen from '../screens/VoteScreen';
 import HistoriqueScreen from '../screens/HistoriqueScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import NouvelleTransactionScreen from '../screens/NouvelleTransactionScreen';
+import AppelDeFondsScreen from '../screens/AppelDeFondsScreen';
+import PaiementAppelScreen from '../screens/PaiementAppelScreen';
 import MainAMainScreen from '../screens/MainAMainScreen';
 import RapportScreen from '../screens/RapportScreen';
 import MembresScreen from '../screens/MembresScreen';
@@ -67,6 +69,12 @@ function DashboardStack({ userData }) {
         options={{ headerShown: false }}
       >
         {props => <MainAMainScreen {...props} userData={userData} />}
+      </Stack.Screen>
+      <Stack.Screen name="AppelDeFonds" options={{ headerShown: false }}>
+        {props => <AppelDeFondsScreen {...props} userData={userData} />}
+      </Stack.Screen>
+      <Stack.Screen name="PaiementAppel" options={{ headerShown: false }}>
+        {props => <PaiementAppelScreen {...props} userData={userData} />}
       </Stack.Screen>
     </Stack.Navigator>
   );

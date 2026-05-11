@@ -1,15 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Alert, Linking,
+  ActivityIndicator, Alert, Linking, Modal, TextInput,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useVotes, useVoter } from '../hooks/useBlockchain';
 import { polygonscanTxUrl } from '../config/blockchain';
-import { collection, doc, onSnapshot, query, runTransaction, setDoc, where, serverTimestamp } from 'firebase/firestore';
+import { addDoc, collection, doc, onSnapshot, query, runTransaction, setDoc, where, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { updateRolesAfterVote } from '../utils/updateRoles';
 import { quorumAtteint } from '../utils/getMembresActifs';
+import { calculerSolde, formaterMontant } from '../utils/soldeUtils';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
@@ -88,6 +89,12 @@ export default function VoteScreen({ userData }) {
   const [govVotes, setGovVotes] = useState([]);
   const [govLoading, setGovLoading] = useState(true);
   const [govVotingId, setGovVotingId] = useState(null);
+  const [paiementModalVisible, setPaiementModalVisible] = useState(false);
+  const [voteAPayer, setVoteAPayer] = useState(null);
+  const [numeroFournisseur, setNumeroFournisseur] = useState('');
+  const [nomFournisseur, setNomFournisseur] = useState('');
+  const [soldeActuel, setSoldeActuel] = useState(0);
+  const [paiementLoading, setPaiementLoading] = useState(false);
 
   // Charger votes locaux (UX uniquement — la règle réelle est on-chain)
   useEffect(() => {
@@ -122,6 +129,19 @@ export default function VoteScreen({ userData }) {
     );
     return () => unsub();
   }, [userData?.cooperativeId]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const solde = await calculerSolde(userData?.cooperativeId || 'broukou');
+        if (alive) setSoldeActuel(solde);
+      } catch {
+        if (alive) setSoldeActuel(0);
+      }
+    })();
+    return () => { alive = false; };
+  }, [historique.length, userData?.cooperativeId]);
 
   async function enregistrerVoteLocal(transactionId, choix) {
     const updated = { ...mesVotes, [transactionId]: choix };
@@ -226,6 +246,89 @@ export default function VoteScreen({ userData }) {
       Alert.alert('Erreur', e?.message || 'Impossible de voter. Réessaie.');
     }
     setGovVotingId(null);
+  }
+
+  function detectOperateur(numero) {
+    const n = String(numero || '').replace(/\D/g, '');
+    if (n.length < 10) return 'Inconnu';
+    const clean = n.startsWith('228') ? n.slice(3) : n;
+    const p = clean.slice(0, 2);
+    if (['90', '91', '92', '93', '98', '99'].includes(p)) return 'MOOV Flooz';
+    if (['96', '97'].includes(p)) return 'MTN MoMo';
+    return 'T-Money';
+  }
+
+  function ouvrirModalPaiementFournisseur(vote) {
+    setVoteAPayer(vote);
+    setNumeroFournisseur('');
+    setNomFournisseur('');
+    setPaiementModalVisible(true);
+  }
+
+  async function confirmerPaiementFournisseur() {
+    if (!voteAPayer) return;
+    const montant = Number(voteAPayer.montant || 0);
+    if (!numeroFournisseur.trim()) {
+      Alert.alert('Erreur', 'Numéro fournisseur requis.');
+      return;
+    }
+    if (soldeActuel < montant) {
+      Alert.alert('Erreur', 'Solde insuffisant.');
+      return;
+    }
+    setPaiementLoading(true);
+    try {
+      const soldeFinal = await calculerSolde(userData?.cooperativeId || 'broukou');
+      if (soldeFinal < montant) {
+        Alert.alert('Erreur', 'Solde insuffisant au moment du paiement.');
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const reference = `PAYOUT_${Date.now()}`;
+
+      await addDoc(collection(db, 'transactions'), {
+        titre: `Paiement fournisseur - ${voteAPayer.titre}`,
+        montant,
+        typeTransaction: 'depense',
+        type: 'sortie',
+        categorie: voteAPayer.categorie || 'Autre',
+        telephoneFournisseur: numeroFournisseur.trim(),
+        nomFournisseur: nomFournisseur.trim() || 'Fournisseur',
+        referencePayment: reference,
+        voteId: voteAPayer.id || voteAPayer.transactionId,
+        cooperativeId: userData?.cooperativeId || 'broukou',
+        statut: 'valide',
+        date: serverTimestamp(),
+        hash: reference,
+        creePar: userData?.uid || '',
+      });
+
+      if (voteAPayer?.transactionId !== undefined && voteAPayer?.transactionId !== null) {
+        await setDoc(doc(db, 'transactions', `chain_${voteAPayer.transactionId}`), {
+          statut: 'valide',
+          referencePayment: reference,
+          telephoneFournisseur: numeroFournisseur.trim(),
+          nomFournisseur: nomFournisseur.trim() || 'Fournisseur',
+        }, { merge: true });
+      }
+
+      await addDoc(collection(db, 'notifications_queue'), {
+        type: 'paiement_fournisseur',
+        titre: `💸 ${voteAPayer.titre} payé !`,
+        message: `${montant.toLocaleString('fr-FR')} FCFA versés au fournisseur. Référence : ${reference}`,
+        cooperativeId: userData?.cooperativeId || 'broukou',
+        createdAt: serverTimestamp(),
+      });
+
+      Alert.alert('Succès', `Paiement effectué.\nRéférence : ${reference}`);
+      setPaiementModalVisible(false);
+      setVoteAPayer(null);
+      refetch();
+    } catch (e) {
+      Alert.alert('Erreur', e?.message || 'Paiement fournisseur impossible.');
+    } finally {
+      setPaiementLoading(false);
+    }
   }
 
   if (loading) return (
@@ -463,6 +566,7 @@ export default function VoteScreen({ userData }) {
           {historique.map((h, idx) => {
             const approuve = h.statut === 'approuve';
             const annule = h.statut === 'annule';
+            const transactionPayee = h.transactionStatut === 'valide' || h.referencePayment;
             return (
               <View key={`${h.transactionId}-${idx}`} style={styles.historiqueRow}>
                 <View style={[styles.hIcon, {
@@ -475,6 +579,18 @@ export default function VoteScreen({ userData }) {
                   <Text style={styles.hSub}>
                     {annule ? 'Annulé — quorum non atteint' : approuve ? 'Approuvé' : 'Rejeté'}
                   </Text>
+                  {approuve && userData?.role === 'tresorier' ? (
+                    transactionPayee ? (
+                      <View style={styles.paidBadge}>
+                        <Text style={styles.paidBadgeText}>✅ Fournisseur payé</Text>
+                        {h.referencePayment ? <Text style={styles.paidRef}>Réf: {h.referencePayment}</Text> : null}
+                      </View>
+                    ) : (
+                      <TouchableOpacity style={styles.paySupplierBtn} onPress={() => ouvrirModalPaiementFournisseur(h)}>
+                        <Text style={styles.paySupplierBtnText}>💸 Payer le fournisseur</Text>
+                      </TouchableOpacity>
+                    )
+                  ) : null}
                 </View>
                 <Text style={[styles.hMontant, {
                   color: approuve ? GREEN : annule ? '#6b7280' : '#dc2626',
@@ -488,6 +604,60 @@ export default function VoteScreen({ userData }) {
       )}
 
       <View style={{ height: 100 }} />
+
+      <Modal visible={paiementModalVisible} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Payer {voteAPayer?.titre || 'la transaction'}</Text>
+            <Text style={styles.modalLine}>Montant : {formaterMontant(voteAPayer?.montant || 0)}</Text>
+
+            <Text style={styles.modalLabel}>Numéro Mobile Money du fournisseur</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={numeroFournisseur}
+              onChangeText={setNumeroFournisseur}
+              placeholder="+228XXXXXXXX"
+              keyboardType="phone-pad"
+            />
+            <Text style={styles.modalHint}>Opérateur détecté : {detectOperateur(numeroFournisseur)}</Text>
+
+            <Text style={styles.modalLabel}>Nom du fournisseur (optionnel)</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={nomFournisseur}
+              onChangeText={setNomFournisseur}
+              placeholder="Nom fournisseur"
+            />
+
+            <View style={styles.resumeCard}>
+              <Text style={styles.resumeLine}>Destinataire : {nomFournisseur || 'Fournisseur'}</Text>
+              <Text style={styles.resumeLine}>Numéro : {numeroFournisseur || '-'}</Text>
+              <Text style={styles.resumeLine}>Montant : {formaterMontant(voteAPayer?.montant || 0)}</Text>
+            </View>
+
+            {soldeActuel < Number(voteAPayer?.montant || 0) ? (
+              <Text style={styles.soldeKo}>
+                ❌ Solde insuffisant - Solde: {formaterMontant(soldeActuel)} - Manque: {formaterMontant(Number(voteAPayer?.montant || 0) - soldeActuel)}
+              </Text>
+            ) : (
+              <Text style={styles.soldeOk}>✅ Solde suffisant</Text>
+            )}
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setPaiementModalVisible(false)}>
+                <Text style={styles.cancelBtnText}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.confirmBtn, (paiementLoading || soldeActuel < Number(voteAPayer?.montant || 0)) && { opacity: 0.6 }]}
+                onPress={confirmerPaiementFournisseur}
+                disabled={paiementLoading || soldeActuel < Number(voteAPayer?.montant || 0)}
+              >
+                {paiementLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.confirmBtnText}>✅ Confirmer le paiement</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -605,4 +775,51 @@ const styles = StyleSheet.create({
   hTitle: { fontSize: 14, fontWeight: '600', color: '#111827' },
   hSub: { fontSize: 12, color: '#6b7280', marginTop: 2 },
   hMontant: { fontSize: 13, fontWeight: '700' },
+  paySupplierBtn: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    backgroundColor: GREEN,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  paySupplierBtnText: { color: '#fff', fontWeight: '800', fontSize: 12 },
+  paidBadge: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    backgroundColor: '#dcfce7',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  paidBadgeText: { color: GREEN_DARK, fontWeight: '800', fontSize: 12 },
+  paidRef: { color: '#166534', marginTop: 2, fontSize: 11 },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalCard: { backgroundColor: '#fff', borderRadius: 16, padding: 14 },
+  modalTitle: { fontSize: 16, fontWeight: '900', color: '#111827', marginBottom: 8 },
+  modalLine: { color: '#374151', marginBottom: 8, fontWeight: '700' },
+  modalLabel: { marginTop: 8, marginBottom: 6, fontSize: 12, fontWeight: '800', color: '#374151' },
+  modalInput: {
+    borderWidth: 1.5,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: '#111827',
+  },
+  modalHint: { marginTop: 6, color: '#6b7280', fontSize: 12 },
+  resumeCard: { marginTop: 10, backgroundColor: '#f3f4f6', borderRadius: 10, padding: 10 },
+  resumeLine: { color: '#374151', marginBottom: 3, fontSize: 12 },
+  soldeKo: { marginTop: 10, color: '#b91c1c', fontWeight: '800', fontSize: 12 },
+  soldeOk: { marginTop: 10, color: GREEN_DARK, fontWeight: '800', fontSize: 12 },
+  modalActions: { marginTop: 12, flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
+  cancelBtn: { backgroundColor: '#f3f4f6', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10 },
+  cancelBtnText: { color: '#374151', fontWeight: '700' },
+  confirmBtn: { backgroundColor: GREEN, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10 },
+  confirmBtnText: { color: '#fff', fontWeight: '800' },
 });

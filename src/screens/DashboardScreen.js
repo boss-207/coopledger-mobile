@@ -5,6 +5,8 @@ import {
 } from 'react-native';
 import { useTransactions, useSolde, useVotes } from '../hooks/useBlockchain';
 import { polygonscanTxUrl, formatFCFA } from '../config/blockchain';
+import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { db } from '../config/firebase';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
@@ -21,10 +23,26 @@ export default function DashboardScreen({ userData, navigation }) {
   const { votes, loading: votesLoading, refetch: refetchVotes } = useVotes();
   const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(new Date());
+  const [appelsActifs, setAppelsActifs] = useState([]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const q = query(
+      collection(db, 'appels_fonds'),
+      where('statut', '==', 'actif'),
+      where('cooperativeId', '==', 'broukou'),
+      orderBy('dateCreation', 'desc')
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      setAppelsActifs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, () => {
+      setAppelsActifs([]);
+    });
+    return () => unsub();
   }, []);
 
   async function onRefresh() {
@@ -111,6 +129,49 @@ export default function DashboardScreen({ userData, navigation }) {
         <StatCard icon="🏦" label="Fonds Totaux" value={formatFCFA(solde)} color={GREEN} bg="#f0fdf4" />
         <StatCard icon="📉" label="Dépenses" value={formatFCFA(depenses)} color="#dc2626" bg="#fef2f2" />
         <StatCard icon="📈" label="Revenus" value={formatFCFA(revenus)} color="#2563eb" bg="#eff6ff" />
+      </View>
+
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Appels de fonds actifs</Text>
+        </View>
+        {appelsActifs.length === 0 ? (
+          <View style={styles.emptyBox}>
+            <Text style={styles.emptyText}>Aucun appel de fonds actif</Text>
+          </View>
+        ) : appelsActifs.map((appel) => {
+          const totalAttendu = Number(appel.totalAttendu || 0);
+          const totalCollecte = Number(appel.totalCollecte || 0);
+          const nbPaye = Array.isArray(appel.membresAyantPaye) ? appel.membresAyantPaye.length : 0;
+          const nbCibles = Math.max(1, Math.round(totalAttendu / Math.max(Number(appel.montantParMembre || 1), 1)));
+          const progressPct = Math.min(100, Math.round((totalCollecte / Math.max(totalAttendu, 1)) * 100));
+          const aPaye = Array.isArray(appel.membresAyantPaye) && appel.membresAyantPaye.includes(userData?.uid);
+          const d = appel?.dateEcheance?.toDate ? appel.dateEcheance.toDate() : new Date(appel.dateEcheance);
+          return (
+            <View key={appel.id} style={styles.appelCard}>
+              <Text style={styles.appelTitle}>💰 {appel.titre}</Text>
+              <Text style={styles.appelMeta}>Demandé par : {appel.creeParNom || 'Trésorier'}</Text>
+              <Text style={styles.appelMeta}>Montant : {Number(appel.montantParMembre || 0).toLocaleString('fr-FR')} FCFA / membre</Text>
+              <Text style={styles.appelMeta}>Échéance : {formatDate(d)}</Text>
+              <Text style={styles.appelMeta}>Progression :</Text>
+              <View style={styles.progressTrack}>
+                <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
+              </View>
+              <Text style={styles.appelMeta}>{nbPaye}/{nbCibles} membres ont payé</Text>
+              <Text style={styles.appelMeta}>{totalCollecte.toLocaleString('fr-FR')} / {totalAttendu.toLocaleString('fr-FR')} FCFA collectés</Text>
+              {aPaye ? (
+                <View style={styles.payeBadge}><Text style={styles.payeBadgeText}>✅ Vous avez payé</Text></View>
+              ) : (
+                <TouchableOpacity
+                  style={styles.payBtn}
+                  onPress={() => navigation.navigate('PaiementAppel', { appel })}
+                >
+                  <Text style={styles.payBtnText}>💳 Payer maintenant</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          );
+        })}
       </View>
 
       {/* BOUTON NOUVELLE TRANSACTION */}
@@ -267,6 +328,21 @@ const styles = StyleSheet.create({
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   sectionTitle: { fontSize: 16, fontWeight: '800', color: '#111827' },
   sectionLink: { fontSize: 13, color: GREEN, fontWeight: '600' },
+  appelCard: {
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+  },
+  appelTitle: { fontSize: 14, fontWeight: '900', color: '#111827' },
+  appelMeta: { marginTop: 4, color: '#4b5563', fontSize: 12 },
+  progressTrack: { height: 10, borderRadius: 8, backgroundColor: '#e5e7eb', marginTop: 8, overflow: 'hidden' },
+  progressFill: { height: '100%', backgroundColor: GREEN, borderRadius: 8 },
+  payeBadge: { marginTop: 10, alignSelf: 'flex-start', backgroundColor: '#dcfce7', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
+  payeBadgeText: { color: GREEN_DARK, fontWeight: '800', fontSize: 12 },
+  payBtn: { marginTop: 10, backgroundColor: GREEN, borderRadius: 10, alignItems: 'center', paddingVertical: 10 },
+  payBtnText: { color: '#fff', fontWeight: '800' },
   emptyBox: { alignItems: 'center', paddingVertical: 24 },
   emptyText: { fontSize: 15, fontWeight: '600', color: '#6b7280' },
   emptySubText: { fontSize: 13, color: '#9ca3af', marginTop: 4, textAlign: 'center' },

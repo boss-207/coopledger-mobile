@@ -196,6 +196,15 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       <View style={{ padding: 20 }}>
+        {(userData?.role === 'tresorier' || userData?.role === 'president') && (
+          <TouchableOpacity
+            style={styles.appelBtn}
+            onPress={() => navigation.navigate('AppelDeFonds', { userData })}
+          >
+            <Text style={styles.appelBtnText}>💰 Appel de fonds</Text>
+          </TouchableOpacity>
+        )}
+
         <View style={styles.soldeCard}>
           {soldeLoading ? (
             <View style={styles.soldeLoadingRow}>
@@ -454,4 +463,14 @@ const styles = StyleSheet.create({
   },
   btnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
   waitingText: { textAlign: 'center', color: '#6b7280', fontSize: 12, marginTop: 10, fontStyle: 'italic' },
+  appelBtn: {
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1.5,
+    borderColor: GREEN,
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  appelBtnText: { color: GREEN_DARK, fontWeight: '800', fontSize: 14 },
 });
