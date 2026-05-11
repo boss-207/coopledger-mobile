@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, ActivityIndicator, Alert, Linking, Image,
@@ -9,6 +9,7 @@ import { polygonscanTxUrl } from '../config/blockchain';
 import { db } from '../config/firebase';
 import { selectImage, uploadJustificatif } from '../utils/uploadImage';
 import { getNombreMembres } from '../utils/getMembresActifs';
+import { calculerSolde, verifierSolde, formaterMontant } from '../utils/soldeUtils';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
@@ -22,6 +23,8 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
   const [justificatifUri, setJustificatifUri] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadingJustificatif, setUploadingJustificatif] = useState(false);
+  const [soldeDisponible, setSoldeDisponible] = useState(0);
+  const [soldeLoading, setSoldeLoading] = useState(true);
 
   const { sendTransaction, loading } = useSendTransaction();
 
@@ -29,6 +32,24 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
   const montantNum = parseFloat(form.montant) || 0;
   const needsVote = montantNum >= 500000;
   const busy = loading || uploadingJustificatif;
+  const depasseSolde = form.type === 'sortie' && !soldeLoading && montantNum > soldeDisponible;
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        setSoldeLoading(true);
+        const coopId = userData?.cooperativeId || 'broukou';
+        const solde = await calculerSolde(coopId);
+        if (alive) setSoldeDisponible(solde);
+      } catch {
+        if (alive) setSoldeDisponible(0);
+      } finally {
+        if (alive) setSoldeLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [userData?.cooperativeId]);
 
   async function ajouterJustificatif() {
     try {
@@ -54,6 +75,18 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
 
     try {
       const coopId = userData?.cooperativeId || 'broukou';
+
+      if (form.type === 'sortie') {
+        const result = await verifierSolde(montantNum, coopId);
+        if (!result.suffisant) {
+          Alert.alert(
+            '❌ Solde insuffisant',
+            `Solde disponible : ${formaterMontant(result.soldeActuel)}\n\nMontant demandé : ${formaterMontant(result.montantDemande)}\n\nIl manque : ${formaterMontant(Math.abs(result.difference))}`
+          );
+          return;
+        }
+      }
+
       let totalMembresActifs = 0;
       try {
         totalMembresActifs = await getNombreMembres(coopId);
@@ -150,6 +183,11 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
           ]
         );
       }
+
+      try {
+        const soldeMaj = await calculerSolde(coopId);
+        setSoldeDisponible(soldeMaj);
+      } catch {}
     } catch (err) {
       Alert.alert('Erreur', err.message || 'Impossible d\'enregistrer la transaction. Réessaie.');
     }
@@ -158,6 +196,18 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       <View style={{ padding: 20 }}>
+        <View style={styles.soldeCard}>
+          {soldeLoading ? (
+            <View style={styles.soldeLoadingRow}>
+              <ActivityIndicator color={GREEN} size="small" />
+              <Text style={styles.soldeLoadingText}>Chargement du solde...</Text>
+            </View>
+          ) : (
+            <Text style={styles.soldeText}>
+              💰 Solde disponible : {formaterMontant(soldeDisponible)}
+            </Text>
+          )}
+        </View>
 
         {/* TYPE */}
         <Text style={styles.label}>TYPE DE TRANSACTION</Text>
@@ -204,6 +254,11 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
             keyboardType="numeric"
           />
         </View>
+        {depasseSolde && (
+          <Text style={styles.soldeWarnText}>
+            ⚠️ Montant supérieur au solde disponible
+          </Text>
+        )}
 
         {needsVote && (
           <View style={styles.alertBox}>
@@ -318,6 +373,24 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8fafc' },
+  soldeCard: {
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+  },
+  soldeLoadingRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  soldeLoadingText: { fontSize: 13, color: '#475569', fontWeight: '700' },
+  soldeText: { fontSize: 14, fontWeight: '800', color: GREEN_DARK },
+  soldeWarnText: {
+    marginTop: 8,
+    color: '#dc2626',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   label: { fontSize: 11, fontWeight: '700', color: '#6b7280', letterSpacing: 1, marginBottom: 8, marginTop: 16 },
   typeRow: { flexDirection: 'row', gap: 10, marginBottom: 4 },
   typeBtn: {

@@ -2,11 +2,13 @@ import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   ActivityIndicator, TextInput, Linking, Modal, Image, Pressable,
+  ScrollView,
 } from 'react-native';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { useTransactions, useSolde } from '../hooks/useBlockchain';
 import { polygonscanTxUrl } from '../config/blockchain';
 import { db } from '../config/firebase';
+import { getBadgeType, TYPES_TRANSACTION } from '../utils/transactionTypes';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
@@ -34,12 +36,21 @@ function toJsDate(uploadedAt) {
   return new Date(uploadedAt);
 }
 
+/** Type métier Firestore ; repli sur l’ancien champ chaîne Polygon si absent. */
+function resolveTypeTransaction(tx, meta) {
+  const brut = meta?.typeTransaction;
+  if (brut && TYPES_TRANSACTION[brut]) return brut;
+  if (tx.type === 'sortie' || tx.type === 'depense') return 'depense';
+  return 'cotisation';
+}
+
 export default function HistoriqueScreen() {
   const { transactions, loading, refetch } = useTransactions();
   const { solde } = useSolde();
   const [filtered, setFiltered] = useState([]);
   const [search, setSearch] = useState('');
   const [activeFilter, setActiveFilter] = useState('tout');
+  const [activeTypeFilter, setActiveTypeFilter] = useState('tous');
   const [metaByChainId, setMetaByChainId] = useState({});
   const [receiptModal, setReceiptModal] = useState({
     visible: false, url: null, nom: '', dateLabel: '',
@@ -50,6 +61,15 @@ export default function HistoriqueScreen() {
     { key: 'revenu', label: '📈 Revenus' },
     { key: 'depense', label: '📉 Dépenses' },
     { key: 'en_cours', label: '⏳ En cours' },
+  ];
+
+  const typeTransactionFilters = [
+    { key: 'tous', label: 'Tous' },
+    { key: 'cotisation', label: '💰' },
+    { key: 'depense', label: '📉' },
+    { key: 'mobile_money', label: '📱' },
+    { key: 'main_a_main', label: '🤝' },
+    { key: 'gouvernance', label: '🏛️' },
   ];
 
   useEffect(() => {
@@ -79,9 +99,15 @@ export default function HistoriqueScreen() {
     if (activeFilter === 'revenu') data = data.filter(t => t.type === 'revenu' || t.type === 'entree');
     else if (activeFilter === 'depense') data = data.filter(t => t.type === 'depense' || t.type === 'sortie');
     else if (activeFilter === 'en_cours') data = data.filter(t => t.statut === 'en_cours');
+    if (activeTypeFilter !== 'tous') {
+      data = data.filter((t) => {
+        const meta = metaByChainId[t.id];
+        return resolveTypeTransaction(t, meta) === activeTypeFilter;
+      });
+    }
     if (search.trim()) data = data.filter(t => t.titre?.toLowerCase().includes(search.toLowerCase()));
     setFiltered(data);
-  }, [activeFilter, search, transactions]);
+  }, [activeFilter, activeTypeFilter, search, transactions, metaByChainId]);
 
   const revenus = transactions
     .filter(t => t.statut === 'valide' && (t.type === 'entree' || t.type === 'revenu'))
@@ -149,6 +175,33 @@ export default function HistoriqueScreen() {
         )}
       </View>
 
+      {/* Filtres par type de transaction (Firestore) */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.typeFiltersScroll}
+      >
+        {typeTransactionFilters.map((f) => (
+          <TouchableOpacity
+            key={f.key}
+            style={[
+              styles.typeChip,
+              activeTypeFilter === f.key ? styles.typeChipActive : styles.typeChipInactive,
+            ]}
+            onPress={() => setActiveTypeFilter(f.key)}
+          >
+            <Text
+              style={[
+                styles.typeChipText,
+                activeTypeFilter === f.key ? styles.typeChipTextActive : styles.typeChipTextInactive,
+              ]}
+            >
+              {f.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
       {/* FILTRES */}
       <View style={styles.filtersRow}>
         {filters.map(f => (
@@ -177,27 +230,44 @@ export default function HistoriqueScreen() {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 100 }}
           renderItem={({ item: tx }) => {
-            const isEntree = tx.type === 'entree' || tx.type === 'revenu';
+            const meta = metaByChainId[tx.id];
+            const typeCle = resolveTypeTransaction(tx, meta);
+            const badge = getBadgeType(typeCle);
             const statutColors = { valide: GREEN, en_cours: '#d97706', rejete: '#dc2626', annule: '#6b7280' };
             const statutLabels = { valide: 'Vérifié ✓', en_cours: 'Vote en cours', rejete: 'Rejeté', annule: 'Annulé' };
             const hashCourt = tx.hash
               ? `${tx.hash.slice(0, 10)}...${tx.hash.slice(-6)}`
               : '0x... (en attente)';
 
-            const meta = metaByChainId[tx.id];
             const justificatif = meta?.justificatif;
             const hasReceipt = Boolean(justificatif?.url);
+            const refPayment = meta?.referencePayment;
+            const prefixeMontant = badge.signe === '' ? '' : badge.signe;
+            const montantFormate = `${prefixeMontant}${(tx.montant / 1000).toFixed(0)}K`;
 
             return (
               <View style={styles.txCard}>
+                <View
+                  style={[
+                    styles.typeBadge,
+                    {
+                      backgroundColor: badge.fondCouleur,
+                      borderColor: badge.couleur + '55',
+                    },
+                  ]}
+                >
+                  <Text style={[styles.typeBadgeText, { color: badge.couleur }]}>
+                    {badge.emoji} {badge.label}
+                  </Text>
+                </View>
                 <TouchableOpacity
                   style={styles.txRowPress}
                   onPress={() => tx.hash && Linking.openURL(polygonscanTxUrl(tx.hash))}
                   disabled={!tx.hash}
                   activeOpacity={tx.hash ? 0.7 : 1}
                 >
-                  <View style={[styles.txIcon, { backgroundColor: isEntree ? '#dcfce7' : '#fee2e2' }]}>
-                    <Text style={{ fontSize: 20 }}>{isEntree ? '📈' : '📉'}</Text>
+                  <View style={[styles.txIcon, { backgroundColor: badge.fondCouleur }]}>
+                    <Text style={{ fontSize: 20 }}>{badge.emoji}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.txTitle} numberOfLines={1}>{tx.titre}</Text>
@@ -208,9 +278,28 @@ export default function HistoriqueScreen() {
                     </Text>
                   </View>
                   <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={[styles.txAmount, { color: isEntree ? GREEN : '#dc2626' }]}>
-                      {isEntree ? '+' : '-'}{(tx.montant / 1000).toFixed(0)}K
-                    </Text>
+                    <View style={styles.amountRow}>
+                      <Text style={[styles.txAmount, { color: badge.couleur }]}>
+                        {montantFormate}
+                      </Text>
+                      {hasReceipt ? (
+                        <TouchableOpacity
+                          onPress={(e) => {
+                            e?.stopPropagation?.();
+                            Linking.openURL(justificatif.url);
+                          }}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          style={styles.attachIconBtn}
+                        >
+                          <Text style={styles.attachIcon}>📎</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                    {refPayment ? (
+                      <Text style={styles.refPayment} numberOfLines={2}>
+                        Réf : {String(refPayment)}
+                      </Text>
+                    ) : null}
                     <View style={[styles.txStatut, {
                       backgroundColor: (statutColors[tx.statut] || '#6b7280') + '20',
                     }]}>
@@ -227,7 +316,7 @@ export default function HistoriqueScreen() {
                     onPress={() => openReceipt(justificatif)}
                     activeOpacity={0.75}
                   >
-                    <Text style={styles.receiptBadgeText}>📎 Voir le reçu</Text>
+                    <Text style={styles.receiptBadgeText}>📷 Aperçu du justificatif</Text>
                   </TouchableOpacity>
                 )}
               </View>
@@ -282,6 +371,34 @@ const styles = StyleSheet.create({
     borderWidth: 1.5, borderColor: '#e5e7eb',
   },
   searchInput: { flex: 1, fontSize: 15, color: '#111827' },
+  typeFiltersScroll: {
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    gap: 8,
+    alignItems: 'center',
+  },
+  typeChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 999,
+    marginRight: 8,
+  },
+  typeChipActive: {
+    backgroundColor: GREEN,
+  },
+  typeChipInactive: {
+    backgroundColor: '#f1f5f9',
+  },
+  typeChipText: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  typeChipTextActive: {
+    color: '#fff',
+  },
+  typeChipTextInactive: {
+    color: '#64748b',
+  },
   filtersRow: { flexDirection: 'row', paddingHorizontal: 16, gap: 8, marginBottom: 12 },
   filterBtn: {
     paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
@@ -297,15 +414,40 @@ const styles = StyleSheet.create({
     borderRadius: 16, padding: 0, marginBottom: 10,
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, elevation: 2,
     overflow: 'hidden',
+    position: 'relative',
   },
+  typeBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    zIndex: 2,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    maxWidth: '62%',
+  },
+  typeBadgeText: { fontSize: 11, fontWeight: '900' },
   txRowPress: {
     flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14,
+    paddingTop: 40,
   },
   txIcon: { width: 44, height: 44, borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
   txTitle: { fontSize: 14, fontWeight: '700', color: '#111827' },
   txDate: { fontSize: 11, color: '#9ca3af', marginTop: 2 },
   txHash: { fontSize: 11, color: GREEN, fontFamily: 'monospace', marginTop: 2 },
   txHashLink: { color: '#2563eb', fontStyle: 'italic' },
+  amountRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  attachIconBtn: { padding: 2 },
+  attachIcon: { fontSize: 18 },
+  refPayment: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#2563eb',
+    marginTop: 4,
+    maxWidth: 180,
+    textAlign: 'right',
+  },
   txAmount: { fontSize: 16, fontWeight: '800' },
   txStatut: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, marginTop: 4 },
   txStatutText: { fontSize: 11, fontWeight: '600' },
