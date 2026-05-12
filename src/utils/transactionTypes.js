@@ -34,6 +34,27 @@ export const TYPES_TRANSACTION = {
     fondCouleur: '#f5f3ff',
     signe: '',
   },
+  vente_recolte: {
+    label: 'Vente récolte',
+    emoji: '🌾',
+    couleur: '#d97706',
+    fondCouleur: '#fffbeb',
+    signe: '+',
+  },
+  subvention: {
+    label: 'Subvention',
+    emoji: '🏛️',
+    couleur: '#7c3aed',
+    fondCouleur: '#f5f3ff',
+    signe: '+',
+  },
+  remboursement: {
+    label: 'Remboursement',
+    emoji: '🔄',
+    couleur: '#0891b2',
+    fondCouleur: '#ecfeff',
+    signe: '+',
+  },
 };
 
 export function getBadgeType(typeTransaction) {

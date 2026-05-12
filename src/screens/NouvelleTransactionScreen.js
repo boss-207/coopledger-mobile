@@ -8,7 +8,7 @@ import { useSendTransaction } from '../hooks/useBlockchain';
 import { polygonscanTxUrl } from '../config/blockchain';
 import { db } from '../config/firebase';
 import { selectImage, uploadJustificatif } from '../utils/uploadImage';
-import { getNombreMembres } from '../utils/getMembresActifs';
+import { getNombreMembres, getMembresActifs } from '../utils/getMembresActifs';
 import { calculerSolde, verifierSolde, formaterMontant } from '../utils/soldeUtils';
 
 const GREEN = '#15803d';
@@ -18,8 +18,20 @@ const CATEGORIES = ['Achat intrants', 'Équipement', 'Formation', 'Transport', '
 
 export default function NouvelleTransactionScreen({ userData, navigation }) {
   const [form, setForm] = useState({
-    titre: '', montant: '', type: 'sortie', categorie: '', fournisseur: '', description: '',
+    titre: '',
+    montant: '',
+    type: 'sortie',
+    categorie: '',
+    fournisseur: '',
+    description: '',
+    modePaiement: 'mobile_money',
+    telephoneFournisseur: '',
+    sourceRevenu: 'cotisation_membre',
+    payeurNom: '',
+    telephonePayeur: '',
+    membreCotisationUid: '',
   });
+  const [membresCotisation, setMembresCotisation] = useState([]);
   const [justificatifUri, setJustificatifUri] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadingJustificatif, setUploadingJustificatif] = useState(false);
@@ -51,6 +63,21 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
     return () => { alive = false; };
   }, [userData?.cooperativeId]);
 
+  useEffect(() => {
+    let alive = true;
+    const coopId = userData?.cooperativeId || 'broukou';
+    if (form.type !== 'entree') return undefined;
+    (async () => {
+      try {
+        const list = await getMembresActifs(coopId);
+        if (alive) setMembresCotisation(list);
+      } catch {
+        if (alive) setMembresCotisation([]);
+      }
+    })();
+    return () => { alive = false; };
+  }, [form.type, userData?.cooperativeId]);
+
   async function ajouterJustificatif() {
     try {
       const uri = await selectImage();
@@ -71,6 +98,22 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
     if (!form.montant || montantNum <= 0) return Alert.alert('Erreur', 'Entre un montant valide.');
     if (justificatifUri && !userData?.uid) {
       return Alert.alert('Connexion requise', 'Connecte-toi pour joindre un justificatif (identifiant membre).');
+    }
+
+    if (form.type === 'sortie' && form.modePaiement === 'mobile_money') {
+      const tel = form.telephoneFournisseur.trim();
+      if (tel.length < 8) {
+        return Alert.alert(
+          'Erreur',
+          'Indique le numéro Mobile Money du fournisseur pour ce mode de paiement.'
+        );
+      }
+    }
+    if (form.type === 'entree' && form.sourceRevenu === 'cotisation_membre' && !form.membreCotisationUid) {
+      return Alert.alert('Erreur', 'Sélectionne le membre qui effectue la cotisation.');
+    }
+    if (form.type === 'entree' && form.sourceRevenu !== 'cotisation_membre' && !form.payeurNom.trim()) {
+      return Alert.alert('Erreur', 'Indique le nom du payeur ou de la source du revenu.');
     }
 
     try {
@@ -98,6 +141,16 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
         ? `${form.titre.trim()} — ${form.fournisseur.trim()}`
         : form.titre.trim();
 
+      const typeTxFirestore = form.type === 'sortie'
+        ? 'depense'
+        : form.sourceRevenu === 'cotisation_membre'
+          ? 'cotisation'
+          : form.sourceRevenu === 'vente_recolte'
+            ? 'vente_recolte'
+            : form.sourceRevenu === 'subvention'
+              ? 'subvention'
+              : 'remboursement';
+
       const { hash, transactionId, voteDeclenche } = await sendTransaction({
         titre: titreComplet,
         montant: montantNum,
@@ -107,6 +160,22 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
 
       const hashCourt = `${hash.slice(0, 10)}...${hash.slice(-6)}`;
       const scanUrl = polygonscanTxUrl(hash);
+
+      const dossierFirestore = {
+        chainTransactionId: transactionId,
+        polygonTxHash: hash,
+        cooperativeId: coopId,
+        typeTransaction: typeTxFirestore,
+        modePaiementFournisseur: form.type === 'sortie' ? form.modePaiement : null,
+        telephoneFournisseur: form.type === 'sortie' ? (form.telephoneFournisseur.trim() || null) : null,
+        sourceRevenu: form.type === 'entree' ? form.sourceRevenu : null,
+        payeurNom: form.type === 'entree' ? (form.payeurNom.trim() || null) : null,
+        telephonePayeur: form.type === 'entree' ? (form.telephonePayeur.trim() || null) : null,
+        membreCotisationUid:
+          form.type === 'entree' && form.sourceRevenu === 'cotisation_membre'
+            ? form.membreCotisationUid
+            : null,
+      };
 
       let justificatifOk = false;
 
@@ -123,8 +192,7 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
             await setDoc(
               doc(db, 'transactions', `chain_${transactionId}`),
               {
-                chainTransactionId: transactionId,
-                polygonTxHash: hash,
+                ...dossierFirestore,
                 justificatif: {
                   url: payload.url,
                   publicId: payload.publicId,
@@ -140,6 +208,12 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
               { merge: true }
             );
             justificatifOk = true;
+          } else {
+            await setDoc(
+              doc(db, 'transactions', `chain_${transactionId}`),
+              dossierFirestore,
+              { merge: true }
+            );
           }
         } catch (uploadErr) {
           Alert.alert(
@@ -147,11 +221,26 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
             uploadErr.message
               || 'Erreur réseau ou Cloudinary. La transaction est bien sur Polygon, mais le justificatif n’a pas été enregistré.'
           );
+          try {
+            await setDoc(
+              doc(db, 'transactions', `chain_${transactionId}`),
+              dossierFirestore,
+              { merge: true }
+            );
+          } catch (_) {
+            /* ignore */
+          }
         } finally {
           setUploadingJustificatif(false);
           setUploadProgress(0);
         }
-      } else if (justificatifUri && (transactionId === null || transactionId === undefined)) {
+      } else if (transactionId !== null && transactionId !== undefined) {
+        await setDoc(
+          doc(db, 'transactions', `chain_${transactionId}`),
+          dossierFirestore,
+          { merge: true }
+        );
+      } else if (justificatifUri) {
         Alert.alert(
           'Justificatif',
           'La transaction est confirmée sur Polygon, mais l’identifiant interne n’a pas été retrouvé : le justificatif n’a pas été lié dans l’app. Tu peux réessayer plus tard depuis une mise à jour.'
@@ -191,6 +280,43 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
     } catch (err) {
       Alert.alert('Erreur', err.message || 'Impossible d\'enregistrer la transaction. Réessaie.');
     }
+  }
+
+  if (userData?.role === 'membre' || userData?.role === 'institution') {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: '#f8fafc',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 24,
+        }}
+      >
+        <Text style={{ fontSize: 48 }}>🚫</Text>
+        <Text
+          style={{
+            fontSize: 18,
+            fontWeight: '800',
+            color: '#374151',
+            marginTop: 16,
+            textAlign: 'center',
+          }}
+        >
+          Accès réservé
+        </Text>
+        <Text
+          style={{
+            fontSize: 14,
+            color: '#6b7280',
+            marginTop: 8,
+            textAlign: 'center',
+          }}
+        >
+          Seuls le trésorier et le président peuvent créer des transactions.
+        </Text>
+      </View>
+    );
   }
 
   return (
@@ -281,6 +407,92 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
           </View>
         )}
 
+        {form.type === 'entree' ? (
+          <View style={styles.revenuSection}>
+            <Text style={styles.label}>SOURCE DU REVENU</Text>
+            <View style={styles.paymentModeRow}>
+              {[
+                { key: 'cotisation_membre', emoji: '💰', label: 'Cotisation membre' },
+                { key: 'vente_recolte', emoji: '🌾', label: 'Vente récolte' },
+                { key: 'subvention', emoji: '🏛️', label: 'Subvention / Don' },
+                { key: 'remboursement', emoji: '🔄', label: 'Remboursement' },
+              ].map((src) => (
+                <TouchableOpacity
+                  key={src.key}
+                  style={[
+                    styles.paymentModeBtn,
+                    form.sourceRevenu === src.key && styles.paymentModeBtnActive,
+                  ]}
+                  onPress={() => update('sourceRevenu', src.key)}
+                >
+                  <Text style={styles.paymentModeEmoji}>{src.emoji}</Text>
+                  <Text
+                    style={[
+                      styles.paymentModeText,
+                      form.sourceRevenu === src.key && styles.paymentModeTextActive,
+                    ]}
+                  >
+                    {src.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {form.sourceRevenu === 'cotisation_membre' ? (
+              <View style={{ marginTop: 12 }}>
+                <Text style={styles.label}>MEMBRE</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }}>
+                  {membresCotisation.map((m) => {
+                    const uid = m.uid || m.id;
+                    const sel = form.membreCotisationUid === uid;
+                    return (
+                      <TouchableOpacity
+                        key={uid}
+                        style={[styles.membreChip, sel && styles.membreChipActive]}
+                        onPress={() => {
+                          update('membreCotisationUid', uid);
+                          update('payeurNom', m.nom || '');
+                        }}
+                      >
+                        <Text style={[styles.membreChipText, sel && styles.membreChipTextActive]}>
+                          {m.nom || 'Membre'}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            ) : (
+              <>
+                <Text style={styles.label}>PAYEUR / SOURCE</Text>
+                <View style={styles.inputBox}>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Nom acheteur, ONG, etc."
+                    placeholderTextColor="#9ca3af"
+                    value={form.payeurNom}
+                    onChangeText={(v) => update('payeurNom', v)}
+                  />
+                </View>
+                <Text style={styles.label}>NUMÉRO MOBILE MONEY DU PAYEUR</Text>
+                <View style={styles.inputBox}>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="+228 90 XX XX XX"
+                    placeholderTextColor="#9ca3af"
+                    value={form.telephonePayeur}
+                    onChangeText={(v) => update('telephonePayeur', v)}
+                    keyboardType="phone-pad"
+                  />
+                </View>
+                <Text style={styles.hintSmall}>
+                  Pour FedaPay : collecte après validation du vote si montant élevé.
+                </Text>
+              </>
+            )}
+          </View>
+        ) : null}
+
         {/* CATÉGORIE */}
         <Text style={styles.label}>CATÉGORIE</Text>
         <View style={styles.catsGrid}>
@@ -308,6 +520,68 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
             onChangeText={v => update('fournisseur', v)}
           />
         </View>
+
+        {form.type === 'sortie' ? (
+          <View style={styles.paymentSection}>
+            <Text style={styles.sectionTitle}>💸 Paiement au fournisseur</Text>
+            <Text style={styles.sectionSubtitle}>
+              Comment voulez-vous payer le fournisseur ?
+            </Text>
+            <View style={styles.paymentModeRow}>
+              {[
+                { key: 'mobile_money', emoji: '📱', label: 'Mobile Money' },
+                { key: 'especes', emoji: '💵', label: 'Espèces' },
+                { key: 'virement', emoji: '🏦', label: 'Virement' },
+              ].map((mode) => (
+                <TouchableOpacity
+                  key={mode.key}
+                  style={[
+                    styles.paymentModeBtn,
+                    form.modePaiement === mode.key && styles.paymentModeBtnActive,
+                  ]}
+                  onPress={() => update('modePaiement', mode.key)}
+                >
+                  <Text style={styles.paymentModeEmoji}>{mode.emoji}</Text>
+                  <Text
+                    style={[
+                      styles.paymentModeText,
+                      form.modePaiement === mode.key && styles.paymentModeTextActive,
+                    ]}
+                  >
+                    {mode.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {form.modePaiement === 'mobile_money' ? (
+              <View>
+                <Text style={styles.label}>NUMÉRO MOBILE MONEY DU FOURNISSEUR</Text>
+                <View style={styles.inputBox}>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="+228 90 XX XX XX"
+                    placeholderTextColor="#9ca3af"
+                    value={form.telephoneFournisseur}
+                    onChangeText={(v) => update('telephoneFournisseur', v)}
+                    keyboardType="phone-pad"
+                  />
+                </View>
+                <Text style={styles.hintSmall}>
+                  Le paiement sera effectué via FedaPay après validation du vote.
+                </Text>
+              </View>
+            ) : null}
+
+            {form.modePaiement === 'especes' ? (
+              <View style={styles.especesEncart}>
+                <Text style={styles.especesEncartText}>
+                  ⚠️ Paiement en espèces : un justificatif signé est obligatoire après le paiement.
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
 
         {/* JUSTIFICATIF */}
         <Text style={styles.label}>JUSTIFICATIF (OPTIONNEL)</Text>
@@ -473,4 +747,72 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   appelBtnText: { color: GREEN_DARK, fontWeight: '800', fontSize: 14 },
+  paymentSection: {
+    backgroundColor: '#f0fdf4',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 12,
+  },
+  sectionTitle: { fontSize: 15, fontWeight: '800', color: GREEN_DARK, marginBottom: 4 },
+  sectionSubtitle: { fontSize: 13, color: '#4b5563', marginBottom: 4 },
+  revenuSection: {
+    backgroundColor: '#eff6ff',
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  paymentModeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginVertical: 12,
+  },
+  paymentModeBtn: {
+    flexGrow: 1,
+    flexBasis: '30%',
+    minWidth: '28%',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 10,
+    padding: 10,
+    alignItems: 'center',
+    backgroundColor: 'white',
+  },
+  paymentModeBtnActive: {
+    borderColor: '#15803d',
+    backgroundColor: '#f0fdf4',
+  },
+  paymentModeEmoji: { fontSize: 20 },
+  paymentModeText: {
+    fontSize: 11,
+    color: '#6b7280',
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  paymentModeTextActive: {
+    color: '#15803d',
+    fontWeight: '700',
+  },
+  hintSmall: { fontSize: 12, color: '#6b7280', marginTop: 4 },
+  especesEncart: {
+    backgroundColor: '#fef3c7',
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 8,
+  },
+  especesEncartText: { color: '#92400e', fontSize: 13 },
+  membreChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: '#e5e7eb',
+    marginRight: 8,
+  },
+  membreChipActive: { borderColor: GREEN, backgroundColor: '#f0fdf4' },
+  membreChipText: { fontSize: 13, fontWeight: '600', color: '#374151' },
+  membreChipTextActive: { color: GREEN_DARK, fontWeight: '800' },
 });

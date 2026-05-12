@@ -9,8 +9,10 @@ import {
   ActivityIndicator,
   Image,
   ScrollView,
+  Platform,
 } from 'react-native';
-import { addDoc, collection, getDocs, query, serverTimestamp, where } from 'firebase/firestore';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { addDoc, collection, getDocs, query, serverTimestamp, Timestamp, where } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { selectImage, compressImage, uploadToCloudinary } from '../utils/uploadImage';
 import { getMembresActifs } from '../utils/getMembresActifs';
@@ -18,17 +20,13 @@ import { getMembresActifs } from '../utils/getMembresActifs';
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
 
-function formatDateFr(value) {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString('fr-FR');
-}
-
 export default function AppelDeFondsScreen({ userData, navigation }) {
+  const coopId = userData?.cooperativeId || 'broukou';
   const [titre, setTitre] = useState('');
   const [raisonAppel, setRaisonAppel] = useState('');
   const [montant, setMontant] = useState('');
-  const [dateEcheance, setDateEcheance] = useState('');
+  const [dateEcheance, setDateEcheance] = useState(null);
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [justifUri, setJustifUri] = useState(null);
   const [loading, setLoading] = useState(false);
   const [etape, setEtape] = useState('');
@@ -41,17 +39,25 @@ export default function AppelDeFondsScreen({ userData, navigation }) {
     (async () => {
       if (!canAccess) return;
       try {
-        const list = await getMembresActifs('broukou');
+        const list = await getMembresActifs(coopId);
         if (alive) setNbMembres(list.length);
       } catch {
         if (alive) setNbMembres(0);
       }
     })();
     return () => { alive = false; };
-  }, [canAccess]);
+  }, [canAccess, coopId]);
 
   const montantNum = useMemo(() => Number(montant || 0), [montant]);
   const totalAttendu = useMemo(() => montantNum * nbMembres, [montantNum, nbMembres]);
+
+  const dateAffichee = dateEcheance
+    ? dateEcheance.toLocaleDateString('fr-FR', {
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric',
+      })
+    : 'Choisir une date';
 
   async function choisirJustificatif() {
     try {
@@ -63,28 +69,28 @@ export default function AppelDeFondsScreen({ userData, navigation }) {
     }
   }
 
-  function parseDateInput(input) {
-    const raw = String(input || '').trim();
-    const m = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-    if (!m) return null;
-    const day = Number(m[1]);
-    const month = Number(m[2]) - 1;
-    const year = Number(m[3]);
-    const d = new Date(year, month, day);
-    if (Number.isNaN(d.getTime())) return null;
-    return d;
-  }
-
   async function lancerAppel() {
+    if (!userData?.uid) {
+      Alert.alert('Erreur', 'Vous devez être connecté.');
+      return;
+    }
+    if (userData?.role !== 'tresorier' && userData?.role !== 'president') {
+      Alert.alert(
+        'Accès refusé',
+        'Seuls le trésorier et le président peuvent créer un appel de fonds.'
+      );
+      return;
+    }
+
     if (!titre.trim()) return Alert.alert('Erreur', "Le titre de l'appel est obligatoire.");
     if (!montantNum || montantNum <= 0) return Alert.alert('Erreur', 'Montant invalide.');
-
-    const dateParsed = parseDateInput(dateEcheance);
-    if (!dateParsed) return Alert.alert('Erreur', 'Date limite invalide. Format attendu : JJ/MM/AAAA');
+    if (!dateEcheance) {
+      return Alert.alert('Erreur', 'Choisissez une date limite de paiement.');
+    }
 
     setLoading(true);
     try {
-      const membres = await getMembresActifs('broukou');
+      const membres = await getMembresActifs(coopId);
       let justificatif = null;
 
       if (justifUri) {
@@ -100,10 +106,10 @@ export default function AppelDeFondsScreen({ userData, navigation }) {
         raisonAppel: raisonAppel.trim(),
         montantParMembre: parseInt(montant, 10),
         justificatif,
-        dateEcheance: dateParsed,
+        dateEcheance: Timestamp.fromDate(dateEcheance),
         creePar: userData?.uid || '',
         creeParNom: userData?.nom || 'Trésorier',
-        cooperativeId: 'broukou',
+        cooperativeId: coopId,
         statut: 'actif',
         dateCreation: serverTimestamp(),
         membresAyantPaye: [],
@@ -112,13 +118,13 @@ export default function AppelDeFondsScreen({ userData, navigation }) {
       });
 
       setEtape('📣 Notifications...');
-      const usersSnap = await getDocs(query(collection(db, 'users'), where('cooperativeId', '==', 'broukou')));
+      const usersSnap = await getDocs(query(collection(db, 'users'), where('cooperativeId', '==', coopId)));
       const notifies = usersSnap.docs.filter((d) => !!d.data()?.fcmToken).length;
       await addDoc(collection(db, 'notifications_queue'), {
         type: 'appel_fonds',
         titre: '💰 Appel de fonds !',
-        message: `${userData?.nom || 'Le trésorier'} demande ${parseInt(montant, 10).toLocaleString('fr-FR')} FCFA avant le ${formatDateFr(dateParsed)}`,
-        cooperativeId: 'broukou',
+        message: `${userData?.nom || 'Le trésorier'} demande ${parseInt(montant, 10).toLocaleString('fr-FR')} FCFA avant le ${dateEcheance.toLocaleDateString('fr-FR')}`,
+        cooperativeId: coopId,
         createdAt: serverTimestamp(),
       });
 
@@ -174,8 +180,42 @@ export default function AppelDeFondsScreen({ userData, navigation }) {
           Total attendu : {totalAttendu.toLocaleString('fr-FR')} FCFA pour {nbMembres} membres actifs
         </Text>
 
-        <Text style={styles.label}>Date limite de paiement (JJ/MM/AAAA)</Text>
-        <TextInput style={styles.input} value={dateEcheance} onChangeText={setDateEcheance} placeholder="25/05/2026" />
+        <Text style={styles.label}>Date limite de paiement</Text>
+        <TouchableOpacity
+          style={styles.datePickerBtn}
+          onPress={() => setShowDatePicker(true)}
+        >
+          <Text style={[styles.datePickerBtnText, !dateEcheance && styles.datePickerPlaceholder]}>
+            📅 {dateAffichee}
+          </Text>
+          <Text style={{ color: GREEN }}>▼</Text>
+        </TouchableOpacity>
+
+        {showDatePicker ? (
+          <>
+            <DateTimePicker
+              value={dateEcheance || new Date()}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              minimumDate={new Date()}
+              locale="fr-FR"
+              onChange={(event, selectedDate) => {
+                if (Platform.OS === 'android') {
+                  setShowDatePicker(false);
+                  if (event.type === 'dismissed') return;
+                }
+                if (selectedDate) {
+                  setDateEcheance(selectedDate);
+                }
+              }}
+            />
+            {Platform.OS === 'ios' ? (
+              <TouchableOpacity style={styles.iosDateDone} onPress={() => setShowDatePicker(false)}>
+                <Text style={styles.iosDateDoneText}>Terminer</Text>
+              </TouchableOpacity>
+            ) : null}
+          </>
+        ) : null}
 
         <Text style={styles.label}>Justificatif (optionnel)</Text>
         {!justifUri ? (
@@ -192,8 +232,8 @@ export default function AppelDeFondsScreen({ userData, navigation }) {
         )}
 
         <TouchableOpacity
-          style={[styles.submitBtn, (!titre.trim() || montantNum <= 0 || loading) && { opacity: 0.6 }]}
-          disabled={!titre.trim() || montantNum <= 0 || loading}
+          style={[styles.submitBtn, (!titre.trim() || montantNum <= 0 || !dateEcheance || loading) && { opacity: 0.6 }]}
+          disabled={!titre.trim() || montantNum <= 0 || !dateEcheance || loading}
           onPress={lancerAppel}
         >
           {loading ? (
@@ -238,6 +278,26 @@ const styles = StyleSheet.create({
   },
   textArea: { minHeight: 88, textAlignVertical: 'top' },
   infoText: { marginTop: 8, color: GREEN_DARK, fontWeight: '700', fontSize: 12 },
+  datePickerBtn: {
+    borderWidth: 1,
+    borderColor: '#d1fae5',
+    borderRadius: 12,
+    backgroundColor: '#f0fdf4',
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  datePickerBtnText: { color: '#1f2937', fontSize: 15, flex: 1 },
+  datePickerPlaceholder: { color: '#9ca3af' },
+  iosDateDone: {
+    marginTop: 8,
+    backgroundColor: GREEN,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  iosDateDoneText: { color: '#fff', fontWeight: '800', fontSize: 15 },
   uploadBtn: { marginTop: 4, backgroundColor: '#ecfdf5', borderRadius: 12, alignItems: 'center', paddingVertical: 12 },
   uploadBtnText: { color: GREEN_DARK, fontWeight: '800' },
   previewWrap: { alignItems: 'center', marginTop: 8 },
@@ -250,4 +310,3 @@ const styles = StyleSheet.create({
   deniedWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc', padding: 20 },
   deniedText: { color: '#b91c1c', fontWeight: '800', fontSize: 16, textAlign: 'center' },
 });
-

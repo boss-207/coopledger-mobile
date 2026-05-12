@@ -955,40 +955,6 @@ export default function MembresScreen({ userData }) {
         }
         ListHeaderComponent={
           <>
-            <View style={styles.header}>
-              <Text style={styles.headerTitle}>Gestion des membres</Text>
-              <Text style={styles.headerSub}>Coopérative {coopId}</Text>
-            </View>
-
-            <View style={styles.statsCard}>
-              <Text style={styles.statsMainNumber}>{statsMembres.total}</Text>
-              <Text style={styles.statsLabel}>{statsMembres.label}</Text>
-              <View style={styles.statsMembresRow}>
-                <View style={styles.statsItem}>
-                  <Text style={styles.statsNum}>👤 {statsMembres.totalMembres}</Text>
-                  <Text style={styles.statsSub}>Membres actifs</Text>
-                </View>
-                <View style={styles.statsDivider} />
-                <View style={styles.statsItem}>
-                  <Text style={styles.statsNum}>🏦 {statsMembres.totalInstitutions}</Text>
-                  <Text style={styles.statsSub}>Institutions</Text>
-                </View>
-              </View>
-            </View>
-
-            <View style={styles.statsRow}>
-              <View style={styles.statCard}>
-                <Text style={styles.statLabel}>Participation</Text>
-                <Text style={styles.statValue}>{participationRate}%</Text>
-              </View>
-              <View style={styles.statCard}>
-                <Text style={styles.statLabel}>Plus actif</Text>
-                <Text style={styles.statValueSmall} numberOfLines={1}>
-                  {mostActive ? `${mostActive.member.nom} (${mostActive.votes})` : '-'}
-                </Text>
-              </View>
-            </View>
-
             {canManage && demandesEnAttente.length > 0 ? (
               <View style={styles.pendingSection}>
                 <View style={styles.pendingHeader}>
@@ -1042,6 +1008,40 @@ export default function MembresScreen({ userData }) {
                 ))}
               </View>
             ) : null}
+
+            <View style={styles.header}>
+              <Text style={styles.headerTitle}>Gestion des membres</Text>
+              <Text style={styles.headerSub}>Coopérative {coopId}</Text>
+            </View>
+
+            <View style={styles.statsCard}>
+              <Text style={styles.statsMainNumber}>{statsMembres.total}</Text>
+              <Text style={styles.statsLabel}>{statsMembres.label}</Text>
+              <View style={styles.statsMembresRow}>
+                <View style={styles.statsItem}>
+                  <Text style={styles.statsNum}>👤 {statsMembres.totalMembres}</Text>
+                  <Text style={styles.statsSub}>Membres actifs</Text>
+                </View>
+                <View style={styles.statsDivider} />
+                <View style={styles.statsItem}>
+                  <Text style={styles.statsNum}>🏦 {statsMembres.totalInstitutions}</Text>
+                  <Text style={styles.statsSub}>Institutions</Text>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.statsRow}>
+              <View style={styles.statCard}>
+                <Text style={styles.statLabel}>Participation</Text>
+                <Text style={styles.statValue}>{participationRate}%</Text>
+              </View>
+              <View style={styles.statCard}>
+                <Text style={styles.statLabel}>Plus actif</Text>
+                <Text style={styles.statValueSmall} numberOfLines={1}>
+                  {mostActive ? `${mostActive.member.nom} (${mostActive.votes})` : '-'}
+                </Text>
+              </View>
+            </View>
 
             {institutions.length > 0 ? (
               <View style={styles.institutionsSection}>

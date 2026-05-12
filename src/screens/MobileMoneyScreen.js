@@ -28,6 +28,7 @@ const GREEN_DARK = '#14532d';
 const DUREE_MAX = 180;
 
 export default function MobileMoneyScreen({ navigation, userData }) {
+  const coopId = userData?.cooperativeId || 'broukou';
   const [montant, setMontant] = useState('');
   const [telephone, setTelephone] = useState(userData?.telephone || '');
   const [objet, setObjet] = useState('Cotisation');
@@ -97,7 +98,7 @@ export default function MobileMoneyScreen({ navigation, userData }) {
         nom: userData?.nom || 'Membre',
         email: userData?.email || 'membre@coopledger.tg',
         telephone: numero,
-        cooperativeId: 'broukou',
+        cooperativeId: coopId,
       });
 
       if (!creation.success) {
@@ -151,7 +152,7 @@ export default function MobileMoneyScreen({ navigation, userData }) {
         fedapayTransactionId: creation.transactionId,
         membreUid: userData?.uid || '',
         membreNom: userData?.nom || 'Membre',
-        cooperativeId: 'broukou',
+        cooperativeId: coopId,
         statut: 'valide',
         date: serverTimestamp(),
         hash: `fedapay_${creation.transactionId}`,

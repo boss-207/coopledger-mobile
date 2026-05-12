@@ -40,6 +40,7 @@ function toJsDate(uploadedAt) {
 function resolveTypeTransaction(tx, meta) {
   const brut = meta?.typeTransaction;
   if (brut && TYPES_TRANSACTION[brut]) return brut;
+  if (tx.typeTransaction && TYPES_TRANSACTION[tx.typeTransaction]) return tx.typeTransaction;
   if (tx.type === 'sortie' || tx.type === 'depense') return 'depense';
   return 'cotisation';
 }
@@ -69,6 +70,9 @@ export default function HistoriqueScreen() {
     { key: 'depense', label: '📉' },
     { key: 'mobile_money', label: '📱' },
     { key: 'main_a_main', label: '🤝' },
+    { key: 'vente_recolte', label: '🌾' },
+    { key: 'subvention', label: '🎁' },
+    { key: 'remboursement', label: '🔄' },
     { key: 'gouvernance', label: '🏛️' },
   ];
 
@@ -111,7 +115,7 @@ export default function HistoriqueScreen() {
 
   const revenus = transactions
     .filter(t => t.statut === 'valide' && (t.type === 'entree' || t.type === 'revenu'))
-    .reduce((a, t) => a + t.montant, 0);
+    .reduce((a, t) => a + Number(t.montant || 0), 0);
 
   function openReceipt(justificatif) {
     const d = toJsDate(justificatif.uploadedAt);
@@ -148,7 +152,7 @@ export default function HistoriqueScreen() {
         <View style={styles.statItem}>
           <Text style={styles.statLabel}>Revenu Total</Text>
           <Text style={[styles.statValue, { color: '#2563eb' }]}>
-            {revenus >= 1000000 ? `${(revenus / 1000000).toFixed(2)}M` : (revenus / 1000).toFixed(0) + 'K'} FCFA
+            {revenus.toLocaleString('fr-FR')} FCFA
           </Text>
         </View>
         <View style={styles.statDivider} />
@@ -234,91 +238,133 @@ export default function HistoriqueScreen() {
             const typeCle = resolveTypeTransaction(tx, meta);
             const badge = getBadgeType(typeCle);
             const statutColors = { valide: GREEN, en_cours: '#d97706', rejete: '#dc2626', annule: '#6b7280' };
-            const statutLabels = { valide: 'Vérifié ✓', en_cours: 'Vote en cours', rejete: 'Rejeté', annule: 'Annulé' };
-            const hashCourt = tx.hash
-              ? `${tx.hash.slice(0, 10)}...${tx.hash.slice(-6)}`
-              : '0x... (en attente)';
-
-            const justificatif = meta?.justificatif;
-            const hasReceipt = Boolean(justificatif?.url);
-            const refPayment = meta?.referencePayment;
+            const statutLabels = { valide: 'Validé', en_cours: 'Vote en cours', rejete: 'Rejeté', annule: 'Annulé' };
+            const justificatif = meta?.justificatif || tx.justificatif;
+            const refPayment = meta?.referencePayment ?? tx.referencePayment;
             const prefixeMontant = badge.signe === '' ? '' : badge.signe;
-            const montantFormate = `${prefixeMontant}${(tx.montant / 1000).toFixed(0)}K`;
+            const montantFormate = `${prefixeMontant}${Number(tx.montant || 0).toLocaleString('fr-FR')} FCFA`;
+            const hashPoly = tx.hash && String(tx.hash).startsWith('0x');
 
             return (
-              <View style={styles.txCard}>
+              <View
+                style={{
+                  backgroundColor: 'white',
+                  borderRadius: 16,
+                  marginBottom: 10,
+                  padding: 14,
+                  elevation: 2,
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 1 },
+                  shadowOpacity: 0.06,
+                  shadowRadius: 4,
+                  borderLeftWidth: 4,
+                  borderLeftColor: badge.couleur,
+                }}
+              >
                 <View
-                  style={[
-                    styles.typeBadge,
-                    {
+                  style={{
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: 6,
+                  }}
+                >
+                  <View
+                    style={{
                       backgroundColor: badge.fondCouleur,
-                      borderColor: badge.couleur + '55',
-                    },
-                  ]}
-                >
-                  <Text style={[styles.typeBadgeText, { color: badge.couleur }]}>
-                    {badge.emoji} {badge.label}
-                  </Text>
-                </View>
-                <TouchableOpacity
-                  style={styles.txRowPress}
-                  onPress={() => tx.hash && Linking.openURL(polygonscanTxUrl(tx.hash))}
-                  disabled={!tx.hash}
-                  activeOpacity={tx.hash ? 0.7 : 1}
-                >
-                  <View style={[styles.txIcon, { backgroundColor: badge.fondCouleur }]}>
-                    <Text style={{ fontSize: 20 }}>{badge.emoji}</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.txTitle} numberOfLines={1}>{tx.titre}</Text>
-                    <Text style={styles.txDate}>{formatDateShort(tx.date)}</Text>
-                    <Text style={styles.txHash} numberOfLines={1}>
-                      🔗 {hashCourt}
-                      {tx.hash && <Text style={styles.txHashLink}> ↗ Polygonscan</Text>}
+                      paddingHorizontal: 8,
+                      paddingVertical: 3,
+                      borderRadius: 8,
+                    }}
+                  >
+                    <Text style={{
+                      fontSize: 12,
+                      fontWeight: '700',
+                      color: badge.couleur,
+                    }}
+                    >
+                      {badge.emoji} {badge.label}
                     </Text>
                   </View>
-                  <View style={{ alignItems: 'flex-end' }}>
-                    <View style={styles.amountRow}>
-                      <Text style={[styles.txAmount, { color: badge.couleur }]}>
-                        {montantFormate}
-                      </Text>
-                      {hasReceipt ? (
-                        <TouchableOpacity
-                          onPress={(e) => {
-                            e?.stopPropagation?.();
-                            Linking.openURL(justificatif.url);
-                          }}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          style={styles.attachIconBtn}
-                        >
-                          <Text style={styles.attachIcon}>📎</Text>
-                        </TouchableOpacity>
-                      ) : null}
-                    </View>
-                    {refPayment ? (
-                      <Text style={styles.refPayment} numberOfLines={2}>
-                        Réf : {String(refPayment)}
-                      </Text>
-                    ) : null}
-                    <View style={[styles.txStatut, {
-                      backgroundColor: (statutColors[tx.statut] || '#6b7280') + '20',
-                    }]}>
-                      <Text style={[styles.txStatutText, { color: statutColors[tx.statut] || '#6b7280' }]}>
-                        {statutLabels[tx.statut] || tx.statut}
-                      </Text>
-                    </View>
-                  </View>
-                </TouchableOpacity>
+                  <Text style={{
+                    fontSize: 16,
+                    fontWeight: '800',
+                    color: badge.couleur,
+                  }}
+                  >
+                    {montantFormate}
+                  </Text>
+                </View>
 
-                {hasReceipt && (
+                <Text
+                  style={{
+                    fontSize: 14,
+                    fontWeight: '600',
+                    color: '#1f2937',
+                    marginBottom: 4,
+                  }}
+                  numberOfLines={1}
+                >
+                  {tx.titre}
+                </Text>
+
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                >
+                  <Text style={{ fontSize: 12, color: '#9ca3af' }}>
+                    📅 {formatDateShort(tx.date)}
+                  </Text>
+                  <View
+                    style={{
+                      backgroundColor: `${statutColors[tx.statut] || '#6b7280'}20`,
+                      paddingHorizontal: 8,
+                      paddingVertical: 2,
+                      borderRadius: 6,
+                    }}
+                  >
+                    <Text style={{
+                      fontSize: 11,
+                      fontWeight: '600',
+                      color: statutColors[tx.statut] || '#6b7280',
+                    }}
+                    >
+                      {statutLabels[tx.statut] || tx.statut}
+                    </Text>
+                  </View>
+                </View>
+
+                {hashPoly ? (
+                  <TouchableOpacity
+                    onPress={() => Linking.openURL(polygonscanTxUrl(tx.hash))}
+                    style={{ marginTop: 6 }}
+                  >
+                    <Text style={{ fontSize: 11, color: '#6b7280' }}>
+                      🔗 {tx.hash.slice(0, 10)}...
+                      {tx.hash.slice(-6)}
+                      <Text style={{ color: '#2563eb' }}> ↗ Polygonscan</Text>
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+
+                {refPayment ? (
+                  <Text style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
+                    Réf: {String(refPayment)}
+                  </Text>
+                ) : null}
+
+                {justificatif?.url ? (
                   <TouchableOpacity
                     style={styles.receiptBadge}
                     onPress={() => openReceipt(justificatif)}
                     activeOpacity={0.75}
                   >
-                    <Text style={styles.receiptBadgeText}>📷 Aperçu du justificatif</Text>
+                    <Text style={styles.receiptBadgeText}>📎 Voir le justificatif</Text>
                   </TouchableOpacity>
-                )}
+                ) : null}
               </View>
             );
           }}

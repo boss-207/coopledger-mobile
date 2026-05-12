@@ -12,6 +12,7 @@ import ProfileScreen from '../screens/ProfileScreen';
 import NouvelleTransactionScreen from '../screens/NouvelleTransactionScreen';
 import AppelDeFondsScreen from '../screens/AppelDeFondsScreen';
 import PaiementAppelScreen from '../screens/PaiementAppelScreen';
+import MobileMoneyScreen from '../screens/MobileMoneyScreen';
 import MainAMainScreen from '../screens/MainAMainScreen';
 import RapportScreen from '../screens/RapportScreen';
 import MembresScreen from '../screens/MembresScreen';
@@ -51,8 +52,11 @@ function VideOngletNouvelleTx() {
   return <View style={{ flex: 1 }} />;
 }
 
-function BoutonOngletNouvelleTransaction(props) {
+function BoutonOngletNouvelleTransaction({ userData, ...props }) {
   const navigation = useNavigation();
+  if (userData?.role === 'membre' || userData?.role === 'institution') {
+    return <View style={[{ flex: 1 }, props.style]} />;
+  }
   return (
     <TouchableOpacity
       activeOpacity={0.88}
@@ -119,6 +123,9 @@ function DashboardStack({ userData }) {
       </Stack.Screen>
       <Stack.Screen name="PaiementAppel" options={{ headerShown: false }}>
         {props => <PaiementAppelScreen {...props} userData={userData} />}
+      </Stack.Screen>
+      <Stack.Screen name="MobileMoney" options={{ headerShown: false }}>
+        {props => <MobileMoneyScreen {...props} userData={userData} />}
       </Stack.Screen>
     </Stack.Navigator>
   );
@@ -214,7 +221,9 @@ export default function AppNavigator({ userData }) {
         component={VideOngletNouvelleTx}
         options={{
           tabBarLabel: '',
-          tabBarButton: (props) => <BoutonOngletNouvelleTransaction {...props} />,
+          tabBarButton: (props) => (
+            <BoutonOngletNouvelleTransaction {...props} userData={userData} />
+          ),
         }}
       />
 
@@ -229,7 +238,7 @@ export default function AppNavigator({ userData }) {
           tabBarIcon: ({ focused }) => <TabIcon emoji="📋" label="Registre" focused={focused} />,
         }}
       >
-        {() => <HistoriqueScreen userData={userData} />}
+        {() => <HistoriqueScreen />}
       </Tab.Screen>
 
       <Tab.Screen

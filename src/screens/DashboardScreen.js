@@ -25,6 +25,7 @@ export default function DashboardScreen({ userData, navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(new Date());
   const [appelsActifs, setAppelsActifs] = useState([]);
+  const [nbDemandes, setNbDemandes] = useState(0);
 
   const coopId = userData?.cooperativeId || 'broukou';
 
@@ -49,7 +50,7 @@ export default function DashboardScreen({ userData, navigation }) {
       setTransactions(data);
 
       const validTx = data.filter((t) => t.statut === 'valide');
-      const entrees = ['cotisation', 'mobile_money', 'main_a_main'];
+      const entrees = ['cotisation', 'mobile_money', 'main_a_main', 'vente_recolte', 'subvention', 'remboursement'];
       const sorties = ['depense'];
 
       const rev = validTx
@@ -96,7 +97,25 @@ export default function DashboardScreen({ userData, navigation }) {
       setAppelsActifs([]);
     });
     return () => unsub();
-  }, []);
+  }, [coopId]);
+
+  useEffect(() => {
+    if (userData?.role !== 'president') {
+      setNbDemandes(0);
+      return undefined;
+    }
+    const qDem = query(
+      collection(db, 'demandes_compte'),
+      where('statut', '==', 'en_attente'),
+      where('cooperativeId', '==', coopId)
+    );
+    const unsub = onSnapshot(
+      qDem,
+      (snap) => setNbDemandes(snap.size),
+      () => setNbDemandes(0)
+    );
+    return () => unsub();
+  }, [userData?.role, coopId]);
 
   async function onRefresh() {
     setRefreshing(true);
@@ -104,7 +123,6 @@ export default function DashboardScreen({ userData, navigation }) {
     setRefreshing(false);
   }
 
-  const peutCreer = userData?.role === 'tresorier' || userData?.role === 'president';
   const roleColors = { president: '#7c3aed', tresorier: '#2563eb', membre: GREEN };
   const roleLabels = { president: '🛡️ Président', tresorier: '🏦 Trésorier', membre: '👤 Membre' };
 
@@ -153,6 +171,24 @@ export default function DashboardScreen({ userData, navigation }) {
           <Text style={styles.alertArrow}>→</Text>
         </TouchableOpacity>
       )}
+
+      {userData?.role === 'president' && nbDemandes > 0 ? (
+        <TouchableOpacity
+          style={styles.demandesBanner}
+          onPress={() => navigation.navigate('Profil', { screen: 'MembresGestion' })}
+        >
+          <Text style={{ fontSize: 20 }}>👤</Text>
+          <View style={{ flex: 1, marginLeft: 10 }}>
+            <Text style={styles.demandesBannerTitle}>
+              {nbDemandes} demande{nbDemandes > 1 ? 's' : ''} en attente
+            </Text>
+            <Text style={styles.demandesBannerSub}>
+              Appuyez pour valider ou refuser
+            </Text>
+          </View>
+          <Text style={{ color: '#b45309' }}>→</Text>
+        </TouchableOpacity>
+      ) : null}
 
       {/* CARTE SOLDE */}
       <View style={styles.soldeCard}>
@@ -232,8 +268,16 @@ export default function DashboardScreen({ userData, navigation }) {
         })}
       </View>
 
-      {/* BOUTON NOUVELLE TRANSACTION */}
-      {peutCreer && (
+      {userData?.role === 'membre' && (
+        <TouchableOpacity
+          style={styles.cotisationBtn}
+          onPress={() => navigation.navigate('MobileMoney', { userData })}
+        >
+          <Text style={styles.cotisationBtnText}>💳 Payer ma cotisation</Text>
+        </TouchableOpacity>
+      )}
+
+      {(userData?.role === 'tresorier' || userData?.role === 'president') && (
         <TouchableOpacity
           style={styles.newTxBtn}
           onPress={() => navigation.navigate('NouvelleTransaction')}
@@ -366,6 +410,35 @@ const styles = StyleSheet.create({
   alertTitle: { fontSize: 14, fontWeight: '700', color: '#92400e' },
   alertSub: { fontSize: 12, color: '#b45309', marginTop: 2 },
   alertArrow: { fontSize: 18, color: '#f59e0b', fontWeight: '700' },
+  demandesBanner: {
+    backgroundColor: '#fef3c7',
+    borderColor: '#f59e0b',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 14,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  demandesBannerTitle: { fontWeight: '700', color: '#92400e' },
+  demandesBannerSub: { fontSize: 12, color: '#b45309', marginTop: 2 },
+  cotisationBtn: {
+    backgroundColor: '#15803d',
+    borderRadius: 16,
+    padding: 18,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#15803d',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  cotisationBtnText: { color: 'white', fontSize: 16, fontWeight: '800' },
   soldeCard: {
     marginHorizontal: 20, marginBottom: 16, backgroundColor: GREEN_DARK,
     borderRadius: 24, padding: 24, overflow: 'hidden',
