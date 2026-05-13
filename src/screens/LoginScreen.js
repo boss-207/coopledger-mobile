@@ -5,14 +5,7 @@ import {
   Platform, ScrollView, Alert
 } from 'react-native';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import {
-  addDoc,
-  collection,
-  getDocs,
-  query,
-  serverTimestamp,
-  where,
-} from 'firebase/firestore';
+import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../config/firebase';
 
 const GREEN = '#15803d';
@@ -20,7 +13,8 @@ const GREEN_DARK = '#14532d';
 const GREEN_LIGHT = '#dcfce7';
 
 export default function LoginScreen() {
-  const [mode, setMode] = useState('connexion'); // 'connexion' | 'demande' | 'confirmation'
+  const [mode, setMode] = useState('connexion'); // 'connexion' | 'demande'
+  const [demandeEnvoyee, setDemandeEnvoyee] = useState(false);
   const [form, setForm] = useState({
     nom: '',
     email: '',
@@ -31,15 +25,6 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
 
   const update = (key, val) => setForm(prev => ({ ...prev, [key]: val }));
-
-  function isEmailValide(email) {
-    const v = String(email || '').trim();
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
-  }
-
-  function countChiffres(value) {
-    return String(value || '').replace(/\D/g, '').length;
-  }
 
   async function handleConnexion() {
     if (!form.email || !form.password)
@@ -53,39 +38,25 @@ export default function LoginScreen() {
     setLoading(false);
   }
 
-  async function handleDemandeCompte() {
-    const nom = form.nom.trim();
-    const email = form.email.trim().toLowerCase();
-    const telephone = form.telephone.trim();
-    const message = form.message?.trim() || '';
+  async function envoyerDemande() {
+    const nom = form.nom;
+    const email = form.email;
+    const telephone = form.telephone;
+    const message = form.message ?? '';
 
-    if (!nom) return Alert.alert('Erreur', 'Nom complet obligatoire.');
-    if (!email) return Alert.alert('Erreur', 'Email obligatoire.');
-    if (!isEmailValide(email)) return Alert.alert('Erreur', 'Format email invalide.');
-    if (!telephone) return Alert.alert('Erreur', 'Numéro de téléphone obligatoire.');
-    if (countChiffres(telephone) < 8) {
-      return Alert.alert('Erreur', 'Le numéro doit contenir au moins 8 chiffres.');
+    if (!nom.trim() || !email.trim() || !telephone.trim()) {
+      Alert.alert('Erreur', 'Tous les champs obligatoires doivent être remplis.');
+      return;
     }
 
     setLoading(true);
     try {
-      const pendingQ = query(
-        collection(db, 'demandes_compte'),
-        where('email', '==', email),
-        where('statut', '==', 'en_attente')
-      );
-      const pendingSnap = await getDocs(pendingQ);
-      if (!pendingSnap.empty) {
-        Alert.alert('Information', 'Une demande est déjà en cours pour cet email.');
-        return;
-      }
-
       await addDoc(collection(db, 'demandes_compte'), {
-        nom,
-        email,
-        telephone,
+        nom: nom.trim(),
+        email: email.trim().toLowerCase(),
+        telephone: telephone.trim(),
         cooperativeId: 'broukou',
-        message,
+        message: message.trim(),
         statut: 'en_attente',
         dateDemande: serverTimestamp(),
         walletAddress: '',
@@ -94,7 +65,7 @@ export default function LoginScreen() {
         raisonRefus: '',
       });
 
-      setMode('confirmation');
+      setDemandeEnvoyee(true);
       setForm((prev) => ({
         ...prev,
         nom: '',
@@ -102,10 +73,16 @@ export default function LoginScreen() {
         telephone: '',
         message: '',
       }));
-    } catch (e) {
-      Alert.alert('Erreur', 'Impossible d’envoyer la demande pour le moment.');
+    } catch (error) {
+      console.error('Erreur:', error);
+      Alert.alert(
+        '❌ Erreur',
+        'Impossible d\'envoyer la demande.\n'
+        + 'Vérifiez votre connexion internet.'
+      );
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   return (
@@ -129,7 +106,7 @@ export default function LoginScreen() {
           {/* CARTE */}
           <View style={styles.card}>
 
-            {mode !== 'confirmation' ? (
+            {!demandeEnvoyee ? (
               <>
                 {/* TABS */}
                 <View style={styles.tabs}>
@@ -212,7 +189,7 @@ export default function LoginScreen() {
 
                 <TouchableOpacity
                   style={styles.btn}
-                  onPress={mode === 'connexion' ? handleConnexion : handleDemandeCompte}
+                  onPress={mode === 'connexion' ? handleConnexion : envoyerDemande}
                   disabled={loading}
                 >
                   {loading
@@ -239,7 +216,10 @@ export default function LoginScreen() {
 
                 <TouchableOpacity
                   style={[styles.btn, { marginTop: 12 }]}
-                  onPress={() => setMode('connexion')}
+                  onPress={() => {
+                    setDemandeEnvoyee(false);
+                    setMode('connexion');
+                  }}
                 >
                   <Text style={styles.btnText}>Retour à la connexion</Text>
                 </TouchableOpacity>

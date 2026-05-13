@@ -1,9 +1,9 @@
-import { useEffect, useRef } from 'react';
-import { Alert, Platform } from 'react-native';
-import * as Device from 'expo-device';
+import { useState, useEffect, useRef } from 'react';
 import * as Notifications from 'expo-notifications';
-import { auth, db } from '../config/firebase';
+import * as Device from 'expo-device';
+import Constants from 'expo-constants';
 import { doc, updateDoc } from 'firebase/firestore';
+import { db, auth } from '../config/firebase';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -13,16 +13,59 @@ Notifications.setNotificationHandler({
   }),
 });
 
-function normalizeToken(token) {
-  if (!token) return null;
-  const s = String(token).trim();
-  return s.length ? s : null;
+export function useNotifications({ userData, navigationRef } = {}) {
+  const [expoPushToken, setExpoPushToken] = useState(null);
+  const notificationListener = useRef();
+  const responseListener = useRef();
+
+  useEffect(() => {
+    const isExpoGo = Constants.appOwnership === 'expo';
+
+    if (isExpoGo) {
+      console.log('Expo Go - notifs désactivées');
+      return;
+    }
+
+    enregistrerNotifications().then(token => {
+      if (token) setExpoPushToken(token);
+    });
+
+    notificationListener.current =
+      Notifications.addNotificationReceivedListener(notification => {
+        console.log('Notification reçue:', notification);
+      });
+
+    responseListener.current =
+      Notifications.addNotificationResponseReceivedListener(response => {
+        const data = response.notification.request.content.data;
+
+        if (data?.type === 'NEW_VOTE' && navigationRef?.current) {
+          navigationRef.current.navigate('Vote');
+        }
+        if (data?.type === 'NEW_TRANSACTION' && navigationRef?.current) {
+          navigationRef.current.navigate('Historique');
+        }
+      });
+
+    // ✅ CORRECTION ICI — utiliser .remove()
+    return () => {
+      notificationListener.current?.remove();
+      responseListener.current?.remove();
+    };
+  }, []);
+
+  return { expoPushToken };
 }
 
-async function registerForPushNotifications() {
-  if (!Device.isDevice) return null;
+async function enregistrerNotifications() {
+  if (!Device.isDevice) {
+    console.log('Simulateur - notifs non disponibles');
+    return null;
+  }
 
-  const { status: existingStatus } = await Notifications.getPermissionsAsync();
+  const { status: existingStatus } =
+    await Notifications.getPermissionsAsync();
+
   let finalStatus = existingStatus;
 
   if (existingStatus !== 'granted') {
@@ -31,91 +74,36 @@ async function registerForPushNotifications() {
   }
 
   if (finalStatus !== 'granted') {
-    Alert.alert(
-      'Notifications désactivées',
-      'Activez les notifications pour être alerté des votes en cours.',
-      [{ text: 'OK' }]
-    );
+    console.log('Permission refusée');
     return null;
   }
 
-  // Expo managed: ceci retourne le token natif (FCM sur Android, APNS sur iOS).
-  // Pour envoyer via Firebase Admin, il faut des tokens FCM. Sur Android (EAS build),
-  // `type` est généralement "fcm".
-  const devicePush = await Notifications.getDevicePushTokenAsync();
-  return {
-    token: normalizeToken(devicePush?.data),
-    type: devicePush?.type || null,
-  };
+  const projectId =
+    Constants.expoConfig?.extra?.eas?.projectId;
+
+  if (!projectId) {
+    console.log('projectId manquant dans app.json');
+    return null;
+  }
+
+  try {
+    const tokenData = await Notifications.getExpoPushTokenAsync({
+      projectId,
+    });
+
+    const token = tokenData.data;
+    console.log('Token:', token);
+
+    if (auth.currentUser) {
+      await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+        expoPushToken: token,
+        fcmTokenUpdatedAt: new Date(),
+      });
+    }
+
+    return token;
+  } catch (error) {
+    console.log('Erreur token:', error);
+    return null;
+  }
 }
-
-export function useNotifications({ userData, navigationRef }) {
-  const lastSavedToken = useRef(null);
-  const lastSavedType = useRef(null);
-
-  useEffect(() => {
-    if (!userData?.uid) return;
-
-    let receivedSub;
-    let responseSub;
-
-    (async () => {
-      try {
-        if (Platform.OS === 'android') {
-          await Notifications.setNotificationChannelAsync('votes', {
-            name: 'Votes',
-            importance: Notifications.AndroidImportance.MAX,
-            vibrationPattern: [0, 250, 250, 250],
-            lightColor: '#15803d',
-            sound: 'default',
-          });
-        }
-
-        const result = await registerForPushNotifications();
-        const token = result?.token;
-        const type = result?.type;
-
-        if (token && token !== lastSavedToken.current) {
-          const uid = auth.currentUser?.uid;
-          if (uid) {
-            await updateDoc(doc(db, 'users', uid), {
-              fcmToken: token,
-              fcmTokenType: type || null,
-              fcmTokenUpdatedAt: new Date(),
-            });
-            lastSavedToken.current = token;
-            lastSavedType.current = type || null;
-          }
-        }
-
-        receivedSub = Notifications.addNotificationReceivedListener((notification) => {
-          // Foreground: Expo affiche déjà la notif (handler),
-          // mais on garde ce hook si tu veux afficher une bannière custom plus tard.
-          void notification;
-        });
-
-        responseSub = Notifications.addNotificationResponseReceivedListener((response) => {
-          const data = response?.notification?.request?.content?.data || {};
-          const type = data.type;
-
-          if (!navigationRef?.current) return;
-          if (type === 'NEW_VOTE') {
-            navigationRef.current.navigate('Votes');
-          } else if (type === 'NEW_TRANSACTION') {
-            navigationRef.current.navigate('Historique');
-          }
-        });
-      } catch (e) {
-        // Ne bloque pas l'app si les notifs ne sont pas configurées
-        // (ex: Expo Go / creds manquants).
-        console.log('Notifications init error:', e?.message || e);
-      }
-    })();
-
-    return () => {
-      if (receivedSub) receivedSub.remove();
-      if (responseSub) responseSub.remove();
-    };
-  }, [userData?.uid, navigationRef]);
-}
-

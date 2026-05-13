@@ -1,6 +1,39 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // Demande d'adhésion depuis l'écran « Demander un compte » (utilisateur non connecté).
+    // Sans cette règle, getDocs/addDoc échouent car le wildcard ci-dessous exige l'auth.
+    match /demandes_compte/{id} {
+      function demandeCompteChampsValides() {
+        let d = request.resource.data;
+        return d.keys().hasOnly([
+            'nom', 'email', 'telephone', 'cooperativeId', 'message', 'statut',
+            'dateDemande', 'walletAddress', 'uid', 'roleChoisi', 'raisonRefus'
+          ])
+          && d.statut == 'en_attente'
+          && d.cooperativeId == 'broukou'
+          && d.nom is string
+          && d.nom.size() > 0
+          && d.nom.size() <= 200
+          && d.email is string
+          && d.email.size() > 3
+          && d.email.size() <= 320
+          && d.telephone is string
+          && d.telephone.size() >= 8
+          && d.telephone.size() <= 40
+          && d.message is string
+          && d.message.size() <= 2000
+          && d.walletAddress == ''
+          && d.uid == ''
+          && d.roleChoisi == ''
+          && d.raisonRefus == '';
+      }
+
+      allow create: if demandeCompteChampsValides();
+      allow read, update, delete: if request.auth != null;
+    }
+
     match /{document=**} {
       allow read, write: if request.auth != null;
     }

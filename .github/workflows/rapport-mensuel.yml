@@ -1,0 +1,71 @@
+# Rapport mensuel par e-mail (Resend) + lecture Firestore (compte de service).
+#
+# Secrets GitHub à créer (Settings → Secrets and variables → Actions) :
+#   FIREBASE_PROJECT_ID
+#   FIREBASE_CLIENT_EMAIL
+#   FIREBASE_PRIVATE_KEY   (clé multiligne ; coller telle quelle, les \n sont normalisés par le script)
+#   RESEND_API_KEY
+#
+# Variables optionnelles (Secrets ou Variables du dépôt) :
+#   RESEND_FROM            ex. CoopLedger <onboarding@resend.dev>
+#   COOPERATIVE_ID         défaut : broukou
+
+name: Rapport mensuel CoopLedger
+
+on:
+  # Test : une fois par jour à 12h UTC (réduire la consommation de minutes GitHub)
+  schedule:
+    - cron: '0 12 * * *'
+  # Production : le 1er de chaque mois à 8h UTC — rapport du MOIS PRÉCÉDENT
+  # (décommenter la ligne suivante et commenter le cron de test ci-dessus)
+  # schedule:
+  #   - cron: '0 8 1 * *'
+
+  workflow_dispatch:
+    inputs:
+      periode:
+        description: 'Mois couvert par le rapport'
+        type: choice
+        required: true
+        default: mois_courant
+        options:
+          - mois_courant
+          - mois_precedent
+
+concurrency:
+  group: rapport-mensuel-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  envoyer-rapport:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: .github/scripts/package-lock.json
+
+      - name: Installer les dépendances
+        working-directory: .github/scripts
+        run: npm install
+
+      - name: Envoyer le rapport
+        working-directory: .github/scripts
+        env:
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_CLIENT_EMAIL: ${{ secrets.FIREBASE_CLIENT_EMAIL }}
+          FIREBASE_PRIVATE_KEY: ${{ secrets.FIREBASE_PRIVATE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM: ${{ vars.RESEND_FROM }}
+          COOPERATIVE_ID: ${{ vars.COOPERATIVE_ID }}
+          # Ordre : entrée manuelle workflow_dispatch → variable dépôt RAPPORT_PERIODE → défaut mois_courant.
+          # Pour un cron le 1er du mois (rapport du mois écoulé), définir la variable RAPPORT_PERIODE = mois_precedent.
+          RAPPORT_PERIODE: ${{ github.event.inputs.periode || vars.RAPPORT_PERIODE || 'mois_courant' }}
+        run: node envoyerRapport.js

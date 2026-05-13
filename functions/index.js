@@ -1,17 +1,14 @@
 /**
- * CoopLedger — Cloud Functions
- * Twilio (WhatsApp + SMS) + Resend (email)
+ * CoopLedger — Cloud Functions (référence / futur plan Blaze)
  *
- * Secrets (Firebase Functions v2) :
- *   firebase functions:secrets:set TWILIO_SID
- *   firebase functions:secrets:set TWILIO_TOKEN
- *   firebase functions:secrets:set TWILIO_WHATSAPP_FROM
- *   firebase functions:secrets:set TWILIO_SMS_FROM
- *   firebase functions:secrets:set RESEND_API_KEY
- *   firebase functions:secrets:set RESEND_FROM
+ * Plan Spark : NE PAS déployer ce dossier (`firebase deploy --only functions`
+ * exige Blaze / Cloud Build). En production Spark, utiliser à la place :
+ * - Rapport e-mail : `src/screens/RapportScreen.js` + `EXPO_PUBLIC_RESEND_KEY` dans `.env`
+ * - Rapport planifié : `.github/workflows/rapport-mensuel.yml` + secrets GitHub
+ * Voir `DEPLOIEMENT_SPARK.md` à la racine du dépôt.
  *
- * TWILIO_WHATSAPP_FROM : ex. whatsapp:+14155238886 (sandbox)
- * TWILIO_SMS_FROM      : numéro SMS E.164, ex. +12025550123 (SMS classique)
+ * Resend (emails) + FCM (push) — si tu repasses en Blaze, renseigne la clé ci-dessous
+ * ou via les variables d’environnement du runtime Functions.
  */
 
 const { initializeApp } = require("firebase-admin/app");
@@ -21,23 +18,21 @@ const { setGlobalOptions } = require("firebase-functions");
 const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 
-const twilio = require("twilio");
 const { Resend } = require("resend");
+
+// ═══════════════════════════════════════
+// CONFIG DIRECTE — POUR DÉMO HACKATHON
+// ═══════════════════════════════════════
+const RESEND_API_KEY = "COLLE_TA_CLE_RESEND";
+const RESEND_FROM = "onboarding@resend.dev";
+// ═══════════════════════════════════════
 
 initializeApp();
 const db = getFirestore();
 
 setGlobalOptions({ maxInstances: 10, region: "europe-west1" });
-
-const twilioSid = defineSecret("TWILIO_SID");
-const twilioToken = defineSecret("TWILIO_TOKEN");
-const twilioWhatsappFrom = defineSecret("TWILIO_WHATSAPP_FROM");
-const twilioSmsFrom = defineSecret("TWILIO_SMS_FROM");
-const resendApiKey = defineSecret("RESEND_API_KEY");
-const resendFrom = defineSecret("RESEND_FROM");
 
 const COOP_DEFAULT_NAME = "CTA de Broukou";
 const VOTE_URL = "https://coopledger-togo.vercel.app/vote";
@@ -562,8 +557,8 @@ async function sendMonthlyReport({ mois, annee, triggeredBy }) {
     return { sent: 0 };
   }
 
-  const resend = new Resend(resendApiKey.value());
-  const fromEmail = resendFrom.value();
+  const resend = new Resend(RESEND_API_KEY);
+  const fromEmail = RESEND_FROM;
   const subject = `📊 Rapport Mensuel CoopLedger - ${monthLabelFr(mois, annee)}`;
 
   const html = buildReportHtml({
@@ -608,9 +603,7 @@ async function sendMonthlyReport({ mois, annee, triggeredBy }) {
   return { sent };
 }
 
-exports.envoyerRapportMensuel = onCall(
-  { secrets: [resendApiKey, resendFrom] },
-  async (request) => {
+exports.envoyerRapportMensuel = onCall(async (request) => {
     if (!request.auth?.uid) {
       throw new HttpsError("unauthenticated", "Connexion requise.");
     }
@@ -644,8 +637,7 @@ exports.envoyerRapportMensuel = onCall(
     });
 
     return { ok: true, ...result };
-  }
-);
+});
 
 // ─── Rapport mensuel planifié ─────────────────────────────────────────────
 // MODE TEST : cron toutes les 2 minutes (`*/2 * * * *`) — désactiver en production.
@@ -653,7 +645,6 @@ exports.rapportTest = onSchedule(
   {
     schedule: "*/2 * * * *",
     timeZone: "Africa/Lome",
-    secrets: [resendApiKey, resendFrom],
   },
   async () => {
     const now = new Date();
@@ -679,7 +670,7 @@ exports.rapportTest = onSchedule(
 //   {
 //     schedule: "0 7 1 * *",
 //     timeZone: "Africa/Lome",
-//     secrets: [resendApiKey, resendFrom],
+//
 //   },
 //   async () => {
 //     const now = new Date();
@@ -695,18 +686,6 @@ function formatMontantFcfa(n) {
   const num = Number(n);
   if (Number.isNaN(num)) return "0";
   return num.toLocaleString("fr-FR");
-}
-
-/**
- * @param {string | undefined | null} raw
- * @returns {string | null} E.164 ou null
- */
-function toE164(raw) {
-  if (raw == null || typeof raw !== "string") return null;
-  const s = raw.trim().replace(/[\s.-]/g, "");
-  if (!s.startsWith("+")) return null;
-  if (!/^\+[1-9]\d{7,14}$/.test(s)) return null;
-  return s;
 }
 
 /**
@@ -729,283 +708,129 @@ function isActiveMember(user) {
   return user.statut !== "inactif";
 }
 
-/**
- * @param {{ nom?: string, titre: string, montant: unknown, cooperativeName: string }} p
- */
-function buildVoteWhatsAppBody({ nom, titre, montant, cooperativeName }) {
-  const prenom = nom || "membre";
-  return (
-    `🌱 *CoopLedger - Vote Requis*\n\n` +
-    `Bonjour ${prenom} 👋\n\n` +
-    `Un vote a été déclenché dans votre coopérative *${cooperativeName}*.\n\n` +
-    `📋 *${titre}*\n` +
-    `💰 *${formatMontantFcfa(montant)} FCFA*\n` +
-    `⏱️ Expire dans *30 minutes*\n\n` +
-    `👉 Votez maintenant :\n` +
-    `${VOTE_URL}\n\n` +
-    `_CoopLedger · Blockchain Polygon_`
-  );
-}
+/** Emails Resend — nouveau vote (sans Twilio). */
+async function sendVoteCreatedEmailsResend(vote) {
+  const titre = vote.titre || vote.title || "Sans titre";
+  const montant = vote.montant ?? vote.amount ?? 0;
+  const cooperativeName = coopNameFromVote(vote);
+  const coopId = vote.cooperativeId || "broukou";
 
-/**
- * @param {{ titre: string, montant: unknown, cooperativeName: string }} p
- */
-function buildVoteSmsBody({ titre, montant, cooperativeName }) {
-  return (
-    `[CoopLedger] Vote requis — ${cooperativeName}. ` +
-    `${titre} — ${formatMontantFcfa(montant)} FCFA. ` +
-    `Expire dans 30 min. ${VOTE_URL}`
-  );
-}
+  const resend = new Resend(RESEND_API_KEY);
+  const fromEmail = RESEND_FROM;
 
-/**
- * @param {{ titre: string, montant: unknown, approved: boolean }} p
- */
-function buildResultWhatsAppBody({ titre, montant, approved }) {
-  if (approved) {
-    return (
-      `✅ *CoopLedger - Vote Approuvé*\n\n` +
-      `La proposition *${titre}* a été approuvée par la majorité.\n` +
-      `💰 ${formatMontantFcfa(montant)} FCFA débloqué.`
+  const usersSnap = await db.collection("users").where("cooperativeId", "==", coopId).get();
+  const tasks = [];
+
+  for (const doc of usersSnap.docs) {
+    const u = doc.data();
+    if (!isActiveMember(u)) continue;
+
+    const nom = u.nom || "";
+    const email = typeof u.email === "string" ? u.email.trim() : "";
+    if (!email || !email.includes("@")) continue;
+
+    tasks.push(
+      resend.emails
+        .send({
+          from: fromEmail,
+          to: email,
+          subject: `CoopLedger — Vote requis : ${titre}`,
+          html:
+            `<p>Bonjour ${nom || "membre"},</p>` +
+            `<p>Un vote a été déclenché dans <strong>${cooperativeName}</strong>.</p>` +
+            `<ul>` +
+            `<li><strong>${titre}</strong></li>` +
+            `<li>Montant : ${formatMontantFcfa(montant)} FCFA</li>` +
+            `<li>Expire dans 30 minutes</li>` +
+            `</ul>` +
+            `<p><a href="${VOTE_URL}">Voter maintenant</a></p>` +
+            `<p><em>CoopLedger · Polygon</em></p>`,
+        })
+        .then(() => logger.info("Email vote créé envoyé", { to: email }))
+        .catch((err) => logger.error("Email vote créé échec", { to: email, error: err.message }))
     );
   }
-  return (
-    `❌ *CoopLedger - Vote Rejeté*\n\n` +
-    `La proposition *${titre}* a été rejetée par les membres.`
-  );
+
+  await Promise.allSettled(tasks);
 }
 
-/**
- * @param {{ titre: string, montant: unknown, approved: boolean }} p
- */
-function buildResultSmsBody({ titre, montant, approved }) {
-  if (approved) {
-    return (
-      `[CoopLedger] Vote approuvé — ${titre}. ` +
-      `${formatMontantFcfa(montant)} FCFA débloqué.`
+/** Emails Resend — vote approuvé ou rejeté. */
+async function sendVoteResultEmailsResend(after, approved) {
+  const titre = after.titre || after.title || "Sans titre";
+  const montant = after.montant ?? after.amount ?? 0;
+  const cooperativeName = coopNameFromVote(after);
+  const coopId = after.cooperativeId || "broukou";
+
+  const resend = new Resend(RESEND_API_KEY);
+  const fromEmail = RESEND_FROM;
+
+  const usersSnap = await db.collection("users").where("cooperativeId", "==", coopId).get();
+  const tasks = [];
+
+  for (const doc of usersSnap.docs) {
+    const u = doc.data();
+    if (!isActiveMember(u)) continue;
+
+    const nom = u.nom || "";
+    const email = typeof u.email === "string" ? u.email.trim() : "";
+    if (!email || !email.includes("@")) continue;
+
+    const subject = approved
+      ? `CoopLedger — Vote approuvé : ${titre}`
+      : `CoopLedger — Vote rejeté : ${titre}`;
+    const html = approved
+      ? `<p>Bonjour ${nom || "membre"},</p>` +
+        `<p>La proposition <strong>${titre}</strong> a été approuvée.</p>` +
+        `<p>Montant : ${formatMontantFcfa(montant)} FCFA débloqué.</p>`
+      : `<p>Bonjour ${nom || "membre"},</p>` +
+        `<p>La proposition <strong>${titre}</strong> a été rejetée.</p>`;
+
+    tasks.push(
+      resend.emails
+        .send({
+          from: fromEmail,
+          to: email,
+          subject,
+          html: html + `<p><em>CoopLedger · ${cooperativeName}</em></p>`,
+        })
+        .then(() => logger.info("Email vote résultat envoyé", { to: email }))
+        .catch((err) => logger.error("Email vote résultat échec", { to: email, error: err.message }))
     );
   }
-  return `[CoopLedger] Vote rejeté — ${titre}.`;
+
+  await Promise.allSettled(tasks);
 }
 
-exports.notifierVoteWhatsApp = onDocumentCreated(
-  {
-    document: "votes/{voteId}",
-    secrets: [
-      twilioSid,
-      twilioToken,
-      twilioWhatsappFrom,
-      twilioSmsFrom,
-      resendApiKey,
-      resendFrom,
-    ],
-  },
+/** Email Resend — nouveau membre (document `users` créé, email renseigné). */
+exports.notifierNouveauMembre = onDocumentCreated(
+  { document: "users/{userId}" },
   async (event) => {
     const snap = event.data;
-    if (!snap) {
-      logger.warn("notifierVoteWhatsApp: pas de snapshot");
-      return;
+    if (!snap) return;
+    const u = snap.data() || {};
+    if (u.statut && u.statut !== "actif") return;
+    const email = typeof u.email === "string" ? u.email.trim() : "";
+    if (!email || !email.includes("@")) return;
+
+    const resend = new Resend(RESEND_API_KEY);
+    const nom = u.nom || "Membre";
+    const coopLabel = coopNameFromVote(u);
+
+    try {
+      await resend.emails.send({
+        from: RESEND_FROM,
+        to: email,
+        subject: "Bienvenue sur CoopLedger",
+        html:
+          `<p>Bonjour ${nom},</p>` +
+          `<p>Votre compte CoopLedger est enregistré pour la coopérative <strong>${coopLabel}</strong>.</p>` +
+          `<p>Vous pouvez vous connecter à l’application mobile pour suivre les votes et les transactions.</p>` +
+          `<p><em>CoopLedger · Polygon</em></p>`,
+      });
+      logger.info("notifierNouveauMembre: email bienvenue envoyé", { to: email });
+    } catch (e) {
+      logger.error("notifierNouveauMembre: échec envoi", { to: email, error: e?.message });
     }
-
-    const vote = snap.data();
-    const titre = vote.titre || vote.title || "Sans titre";
-    const montant = vote.montant ?? vote.amount ?? 0;
-    const cooperativeName = coopNameFromVote(vote);
-    const coopId = vote.cooperativeId || "broukou";
-
-    const client = twilio(twilioSid.value(), twilioToken.value());
-    const waFrom = twilioWhatsappFrom.value();
-    const smsFrom = twilioSmsFrom.value();
-    const resend = new Resend(resendApiKey.value());
-    const fromEmail = resendFrom.value();
-
-    const usersSnap = await db
-      .collection("users")
-      .where("cooperativeId", "==", coopId)
-      .get();
-
-    const tasks = [];
-
-    for (const doc of usersSnap.docs) {
-      const u = doc.data();
-      if (!isActiveMember(u)) continue;
-
-      const nom = u.nom || "";
-      const phone = toE164(u.telephone);
-
-      if (phone) {
-        const waBody = buildVoteWhatsAppBody({
-          nom,
-          titre,
-          montant,
-          cooperativeName,
-        });
-        tasks.push(
-          client.messages
-            .create({
-              from: waFrom,
-              to: `whatsapp:${phone}`,
-              body: waBody,
-            })
-            .then(() => logger.info("WhatsApp vote envoyé", { to: phone }))
-            .catch((err) =>
-              logger.error("WhatsApp vote échec", { to: phone, error: err.message })
-            )
-        );
-
-        tasks.push(
-          client.messages
-            .create({
-              from: smsFrom,
-              to: phone,
-              body: buildVoteSmsBody({ titre, montant, cooperativeName }),
-            })
-            .then(() => logger.info("SMS vote envoyé", { to: phone }))
-            .catch((err) =>
-              logger.error("SMS vote échec", { to: phone, error: err.message })
-            )
-        );
-      }
-
-      const email = typeof u.email === "string" ? u.email.trim() : "";
-      if (email && email.includes("@")) {
-        tasks.push(
-          resend.emails
-            .send({
-              from: fromEmail,
-              to: email,
-              subject: `CoopLedger — Vote requis : ${titre}`,
-              html:
-                `<p>Bonjour ${nom || "membre"},</p>` +
-                `<p>Un vote a été déclenché dans <strong>${cooperativeName}</strong>.</p>` +
-                `<ul>` +
-                `<li><strong>${titre}</strong></li>` +
-                `<li>Montant : ${formatMontantFcfa(montant)} FCFA</li>` +
-                `<li>Expire dans 30 minutes</li>` +
-                `</ul>` +
-                `<p><a href="${VOTE_URL}">Voter maintenant</a></p>` +
-                `<p><em>CoopLedger · Polygon</em></p>`,
-            })
-            .then(() => logger.info("Email vote envoyé", { to: email }))
-            .catch((err) =>
-              logger.error("Email vote échec", { to: email, error: err.message })
-            )
-        );
-      }
-    }
-
-    await Promise.allSettled(tasks);
-  }
-);
-
-exports.notifierResultatWhatsApp = onDocumentUpdated(
-  {
-    document: "votes/{voteId}",
-    secrets: [
-      twilioSid,
-      twilioToken,
-      twilioWhatsappFrom,
-      twilioSmsFrom,
-      resendApiKey,
-      resendFrom,
-    ],
-  },
-  async (event) => {
-    const before = event.data.before.data();
-    const after = event.data.after.data();
-
-    const prev = before.statut;
-    const next = after.statut;
-
-    if (prev === next) return;
-    if (next !== "approuve" && next !== "rejete") return;
-
-    const approved = next === "approuve";
-    const titre = after.titre || after.title || "Sans titre";
-    const montant = after.montant ?? after.amount ?? 0;
-    const cooperativeName = coopNameFromVote(after);
-    const coopId = after.cooperativeId || "broukou";
-
-    const client = twilio(twilioSid.value(), twilioToken.value());
-    const waFrom = twilioWhatsappFrom.value();
-    const smsFrom = twilioSmsFrom.value();
-    const resend = new Resend(resendApiKey.value());
-    const fromEmail = resendFrom.value();
-
-    const usersSnap = await db
-      .collection("users")
-      .where("cooperativeId", "==", coopId)
-      .get();
-
-    const waResultBody = buildResultWhatsAppBody({ titre, montant, approved });
-    const smsResultBody = buildResultSmsBody({ titre, montant, approved });
-
-    const tasks = [];
-
-    for (const doc of usersSnap.docs) {
-      const u = doc.data();
-      if (!isActiveMember(u)) continue;
-
-      const nom = u.nom || "";
-      const phone = toE164(u.telephone);
-
-      if (phone) {
-        tasks.push(
-          client.messages
-            .create({
-              from: waFrom,
-              to: `whatsapp:${phone}`,
-              body: waResultBody,
-            })
-            .then(() => logger.info("WhatsApp résultat envoyé", { to: phone }))
-            .catch((err) =>
-              logger.error("WhatsApp résultat échec", { to: phone, error: err.message })
-            )
-        );
-
-        tasks.push(
-          client.messages
-            .create({
-              from: smsFrom,
-              to: phone,
-              body: smsResultBody,
-            })
-            .then(() => logger.info("SMS résultat envoyé", { to: phone }))
-            .catch((err) =>
-              logger.error("SMS résultat échec", { to: phone, error: err.message })
-            )
-        );
-      }
-
-      const email = typeof u.email === "string" ? u.email.trim() : "";
-      if (email && email.includes("@")) {
-        const subject = approved
-          ? `CoopLedger — Vote approuvé : ${titre}`
-          : `CoopLedger — Vote rejeté : ${titre}`;
-        const html = approved
-          ? `<p>Bonjour ${nom || "membre"},</p>` +
-            `<p>La proposition <strong>${titre}</strong> a été approuvée.</p>` +
-            `<p>Montant : ${formatMontantFcfa(montant)} FCFA débloqué.</p>`
-          : `<p>Bonjour ${nom || "membre"},</p>` +
-            `<p>La proposition <strong>${titre}</strong> a été rejetée.</p>`;
-
-        tasks.push(
-          resend.emails
-            .send({
-              from: fromEmail,
-              to: email,
-              subject,
-              html: html + `<p><em>CoopLedger · ${cooperativeName}</em></p>`,
-            })
-            .then(() => logger.info("Email résultat envoyé", { to: email }))
-            .catch((err) =>
-              logger.error("Email résultat échec", { to: email, error: err.message })
-            )
-        );
-      }
-    }
-
-    await Promise.allSettled(tasks);
   }
 );
 
@@ -1033,17 +858,22 @@ exports.notifierNouveauVote = onDocumentCreated(
 
     if (members.length === 0) {
       logger.info("FCM: aucun membre/token pour nouveau vote", { voteId });
-      return;
+    } else {
+      const tokenToUserRef = new Map(members.map((m) => [m.token, m.ref]));
+      const tokens = members.map((m) => m.token);
+
+      const base = buildNewVotePush({ voteId, titre, montant });
+      const chunks = chunkArray(tokens, 500);
+
+      for (const c of chunks) {
+        await sendMulticastWithRetry({ ...base, tokens: c }, tokenToUserRef);
+      }
     }
 
-    const tokenToUserRef = new Map(members.map((m) => [m.token, m.ref]));
-    const tokens = members.map((m) => m.token);
-
-    const base = buildNewVotePush({ voteId, titre, montant });
-    const chunks = chunkArray(tokens, 500);
-
-    for (const c of chunks) {
-      await sendMulticastWithRetry({ ...base, tokens: c }, tokenToUserRef);
+    try {
+      await sendVoteCreatedEmailsResend(vote);
+    } catch (e) {
+      logger.error("Resend nouveau vote: échec", { voteId, error: e?.message });
     }
   }
 );
@@ -1076,35 +906,43 @@ exports.notifierResultatVote = onDocumentUpdated(
       excludeUid: null,
     });
 
-    if (members.length === 0) return;
+    if (members.length > 0) {
+      const tokenToUserRef = new Map(members.map((m) => [m.token, m.ref]));
+      const tokens = members.map((m) => m.token);
+      const governancePayload =
+        after.type === "transfert_presidence" || after.type === "transfert_tresorier"
+          ? buildGovernanceResultPush({ ...after, id: voteId })
+          : null;
 
-    const tokenToUserRef = new Map(members.map((m) => [m.token, m.ref]));
-    const tokens = members.map((m) => m.token);
-    const governancePayload =
-      after.type === "transfert_presidence" || after.type === "transfert_tresorier"
-        ? buildGovernanceResultPush({ ...after, id: voteId })
-        : null;
-
-    const base = {
-      ...(governancePayload || buildVoteResultPush({ voteId, titre, montant, statut: nouveauStatut })),
-      android: {
-        priority: "high",
-        notification: {
-          channelId: "votes",
-          priority: "max",
-          defaultSound: true,
-          defaultVibrateTimings: true,
-          color: "#15803d",
-          icon: "notification_icon",
+      const base = {
+        ...(governancePayload || buildVoteResultPush({ voteId, titre, montant, statut: nouveauStatut })),
+        android: {
+          priority: "high",
+          notification: {
+            channelId: "votes",
+            priority: "max",
+            defaultSound: true,
+            defaultVibrateTimings: true,
+            color: "#15803d",
+            icon: "notification_icon",
+          },
         },
-      },
-      apns: {
-        payload: { aps: { sound: "default", badge: 1, contentAvailable: true } },
-      },
-    };
+        apns: {
+          payload: { aps: { sound: "default", badge: 1, contentAvailable: true } },
+        },
+      };
 
-    for (const c of chunkArray(tokens, 500)) {
-      await sendMulticastWithRetry({ ...base, tokens: c }, tokenToUserRef);
+      for (const c of chunkArray(tokens, 500)) {
+        await sendMulticastWithRetry({ ...base, tokens: c }, tokenToUserRef);
+      }
+    }
+
+    if (nouveauStatut === "approuve" || nouveauStatut === "rejete") {
+      try {
+        await sendVoteResultEmailsResend(after, nouveauStatut === "approuve");
+      } catch (e) {
+        logger.error("Resend résultat vote: échec", { voteId, error: e?.message });
+      }
     }
   }
 );

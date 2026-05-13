@@ -7,19 +7,11 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#14532d"
     },
-
-    "ios": {
-      "supportsTablet": false,
-      "bundleIdentifier": "com.coopledger.app",
-      "googleServicesFile": "./GoogleService-Info.plist"
-    },
-
     "android": {
       "package": "com.coopledger.app",
       "googleServicesFile": "./google-services.json",
@@ -29,24 +21,22 @@
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
-        "NOTIFICATIONS",
-        "RECEIVE_BOOT_COMPLETED",
-        "VIBRATE",
-        "CAMERA",
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "android.permission.NOTIFICATIONS",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.VIBRATE",
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
       ]
     },
-
     "androidNavigationBar": {
       "backgroundColor": "#ffffff",
       "barStyle": "dark-content"
     },
-
     "web": {
       "favicon": "./assets/favicon.png"
     },
-
     "plugins": [
       [
         "expo-notifications",
@@ -66,10 +56,9 @@
         }
       ]
     ],
-
     "extra": {
       "eas": {
-        "projectId": "coopledger-mobile"
+        "projectId": "6b29078a-377a-4d1f-b442-ebb6b8b90850"
       }
     }
   }

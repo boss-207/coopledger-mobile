@@ -9,9 +9,19 @@ import {
   Share,
   Alert,
 } from 'react-native';
-import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
+import {
+  addDoc,
+  collection,
+  getDocs,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  where,
+} from 'firebase/firestore';
 import { db } from '../config/firebase';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+
+const RESEND_API_KEY = process.env.EXPO_PUBLIC_RESEND_KEY;
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
@@ -370,19 +380,136 @@ Destinataires: IFAD, Banques partenaires, Ministère de l'Agriculture.`;
 
   const handleSendEmail = async () => {
     if (sendingEmail) return;
+    if (!RESEND_API_KEY) {
+      Alert.alert(
+        'Configuration manquante',
+        'Définissez EXPO_PUBLIC_RESEND_KEY dans votre fichier .env puis redémarrez Expo.'
+      );
+      return;
+    }
     setSendingEmail(true);
+
     try {
       const { start } = getMonthRange(selectedMonthMode);
-      const mois = start.getMonth() + 1; // 1..12
+      const mois = start.getMonth() + 1;
       const annee = start.getFullYear();
 
-      const functions = getFunctions(undefined, 'europe-west1');
-      const envoyer = httpsCallable(functions, 'envoyerRapportMensuel');
-      await envoyer({ mois, annee });
+      const nomsMois = [
+        'Janvier',
+        'Février',
+        'Mars',
+        'Avril',
+        'Mai',
+        'Juin',
+        'Juillet',
+        'Août',
+        'Septembre',
+        'Octobre',
+        'Novembre',
+        'Décembre',
+      ];
+      const nomMois = nomsMois[mois - 1];
 
-      Alert.alert('Succès', 'Rapport envoyé à tous les membres ✅');
-    } catch (e) {
-      Alert.alert('Erreur', e?.message || 'Envoi impossible. Réessaie.');
+      const membresSnap = await getDocs(
+        query(
+          collection(db, 'users'),
+          where('cooperativeId', '==', 'broukou'),
+          where('statut', '==', 'actif')
+        )
+      );
+      const destinataires = membresSnap.docs.map((d) => d.data().email).filter(Boolean);
+
+      if (destinataires.length === 0) {
+        Alert.alert('Info', 'Aucun membre avec email.');
+        setSendingEmail(false);
+        return;
+      }
+
+      const fmt = (n) => `${(n || 0).toLocaleString('fr-FR')} FCFA`;
+
+      const html = `
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:Arial,sans-serif;">
+<div style="max-width:560px;margin:32px auto;background:white;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+  <div style="background:#14532d;padding:32px;text-align:center;">
+    <p style="font-size:40px;margin:0;">🌱</p>
+    <h1 style="color:white;margin:8px 0 4px;font-size:22px;">CoopLedger</h1>
+    <p style="color:rgba(255,255,255,0.8);margin:0;font-size:14px;">Rapport ${nomMois} ${annee}</p>
+    <p style="color:rgba(255,255,255,0.6);margin:4px 0 0;font-size:12px;">CTA de Broukou · Togo</p>
+  </div>
+  <div style="padding:28px;">
+    <div style="background:${
+      computed.soldeMois >= 0 ? '#f0fdf4' : '#fef2f2'
+    };border-radius:12px;padding:20px;text-align:center;margin-bottom:24px;">
+      <p style="margin:0;font-size:13px;color:#6b7280;">Solde du mois</p>
+      <p style="margin:8px 0 0;font-size:32px;font-weight:800;color:${
+        computed.soldeMois >= 0 ? '#15803d' : '#dc2626'
+      };">
+        ${computed.soldeMois >= 0 ? '+' : ''}${fmt(computed.soldeMois)}
+      </p>
+    </div>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+      <tr style="background:#f8fafc;">
+        <td style="padding:12px;font-size:13px;">📈 Entrées</td>
+        <td style="padding:12px;font-weight:700;text-align:right;color:#15803d;">+${fmt(computed.totalEntrees)}</td>
+      </tr>
+      <tr>
+        <td style="padding:12px;font-size:13px;">📉 Dépenses</td>
+        <td style="padding:12px;font-weight:700;text-align:right;color:#dc2626;">-${fmt(computed.totalDepenses)}</td>
+      </tr>
+    </table>
+    <div style="background:#f0fdf4;border-radius:10px;padding:14px;text-align:center;">
+      <p style="margin:0;color:#15803d;font-size:13px;font-weight:600;">⛓️ Données blockchain Polygon</p>
+    </div>
+  </div>
+  <div style="background:#f8fafc;padding:16px;text-align:center;border-top:1px solid #e5e7eb;">
+    <p style="color:#9ca3af;font-size:11px;margin:0;">CoopLedger · MIABE 2026 🇹🇬</p>
+  </div>
+</div>
+</body></html>`;
+
+      let envoyes = 0;
+      for (const email of destinataires) {
+        try {
+          const resp = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${RESEND_API_KEY}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              from: 'CoopLedger <onboarding@resend.dev>',
+              to: email,
+              subject: `📊 Rapport CoopLedger — ${nomMois} ${annee}`,
+              html,
+            }),
+          });
+          if (resp.ok) envoyes += 1;
+          await new Promise((r) => setTimeout(r, 300));
+        } catch (err) {
+          console.error('Email error:', email, err);
+        }
+      }
+
+      await addDoc(collection(db, 'rapports_envoyes'), {
+        mois,
+        annee,
+        nomMois,
+        cooperativeId: 'broukou',
+        totalEntrees: computed.totalEntrees,
+        totalDepenses: computed.totalDepenses,
+        solde: computed.soldeMois,
+        emailsEnvoyes: envoyes,
+        dateEnvoi: serverTimestamp(),
+      });
+
+      Alert.alert(
+        '✅ Rapport envoyé !',
+        `${envoyes}/${destinataires.length} emails envoyés avec succès.`
+      );
+    } catch (err) {
+      Alert.alert('❌ Erreur', err?.message || 'Envoi impossible.');
     }
     setSendingEmail(false);
   };

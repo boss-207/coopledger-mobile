@@ -558,7 +558,7 @@ export default function MembresScreen({ userData }) {
         const continuerFallback = await new Promise((resolve) => {
           Alert.alert(
             'Function indisponible',
-            'La Function validerDemandeCompte est indisponible. Continuer avec la création côté client ? Le président sera déconnecté momentanément.',
+            'La Function validerDemandeCompte est indisponible. Continuer avec la création côté client ?',
             [
               { text: 'Annuler', style: 'cancel', onPress: () => resolve(false) },
               { text: 'Continuer', style: 'destructive', onPress: () => resolve(true) },
@@ -956,16 +956,10 @@ export default function MembresScreen({ userData }) {
         ListHeaderComponent={
           <>
             {canManage && demandesEnAttente.length > 0 ? (
-              <View style={styles.pendingSection}>
-                <View style={styles.pendingHeader}>
-                  <Text style={styles.pendingHeaderTitle}>
-                    👤 Demandes en attente ({demandesEnAttente.length})
-                  </Text>
-                  <View style={styles.pendingCountBadge}>
-                    <Text style={styles.pendingCountText}>{demandesEnAttente.length}</Text>
-                  </View>
-                </View>
-
+              <View style={styles.alertBannerDemandes}>
+                <Text style={styles.alertBannerTitle}>
+                  🔔 {demandesEnAttente.length} demande(s) en attente de validation
+                </Text>
                 {demandesEnAttente.map((demande) => (
                   <View key={demande.id} style={styles.pendingCard}>
                     <View style={styles.pendingTopRow}>
@@ -1619,29 +1613,20 @@ const styles = StyleSheet.create({
   statValue: { fontSize: 20, fontWeight: '900', color: '#111827' },
   statValueSmall: { fontSize: 13, fontWeight: '800', color: '#111827' },
   sectionTitle: { fontSize: 17, fontWeight: '900', color: '#111827', marginBottom: 10 },
-  pendingSection: { marginBottom: 14 },
-  pendingHeader: {
-    backgroundColor: '#ffedd5',
+  alertBannerDemandes: {
+    marginBottom: 14,
+    backgroundColor: '#fef3c7',
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#fdba74',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
+    borderColor: '#f59e0b',
+    padding: 14,
   },
-  pendingHeaderTitle: { color: '#9a3412', fontWeight: '900', fontSize: 14 },
-  pendingCountBadge: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#dc2626',
+  alertBannerTitle: {
+    color: '#92400e',
+    fontWeight: '900',
+    fontSize: 15,
+    marginBottom: 12,
   },
-  pendingCountText: { color: '#fff', fontWeight: '900', fontSize: 12 },
   pendingCard: {
     backgroundColor: '#fff',
     borderRadius: 14,
