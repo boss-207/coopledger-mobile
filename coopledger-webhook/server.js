@@ -1,4 +1,5 @@
 const express = require('express');
+const cron = require('node-cron');
 const admin = require('firebase-admin');
 const fetch = require('node-fetch');
 const { ethers } = require('ethers');
@@ -238,6 +239,48 @@ app.get(
 );
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
+
+// Rapport mensuel — rappel push le 1er du mois à 8h (Togo)
+cron.schedule(
+  '0 8 1 * *',
+  async () => {
+    console.log('[CRON] Génération rapport mensuel automatique');
+    try {
+      const usersSnap = await db
+        .collection('users')
+        .where('role', '==', 'president')
+        .where('statut', '==', 'actif')
+        .get();
+
+      console.log(`[CRON] ${usersSnap.size} président(s) trouvé(s)`);
+
+      const tokens = usersSnap.docs
+        .map((d) => d.data().expoPushToken)
+        .filter((t) => t && String(t).startsWith('ExponentPushToken['));
+
+      if (tokens.length > 0) {
+        const messages = tokens.map((token) => ({
+          to: token,
+          title: '📊 Rapport mensuel disponible',
+          body:
+            'Le rapport du mois précédent est prêt. Ouvrez l\'app pour le consulter.',
+          data: { type: 'RAPPORT_MENSUEL' },
+          sound: 'default',
+          channelId: 'votes',
+        }));
+
+        await fetch(EXPO_PUSH_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(messages),
+        });
+      }
+    } catch (e) {
+      console.error('[CRON] Rapport mensuel:', e);
+    }
+  },
+  { timezone: 'Africa/Lome' }
+);
 
 app.get('/', (req, res) => {
   res.json({

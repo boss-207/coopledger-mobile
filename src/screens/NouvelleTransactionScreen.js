@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, ActivityIndicator, Alert, Linking, Image,
@@ -30,19 +30,26 @@ const OPERATEURS_DEPENSE = [
 
 const CATEGORIES = ['Achat intrants', 'Équipement', 'Formation', 'Transport', 'Cotisations', 'Autre'];
 
-/** Rôle comparable : minuscules, sans accents ni ponctuation parasite. */
+// Normalise un rôle pour comparaison : minuscules, sans accents, sans espaces, sans ponctuation
 function normaliserRole(role) {
   if (!role) return '';
   return String(role)
-    .toLowerCase()
     .trim()
-    .replace(/\s+/g, '')
+    .toLowerCase()
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z]/g, '');
+    .replace(/[\u0300-\u036f]/g, '') // enlève les accents
+    .replace(/[^a-z]/g, ''); // enlève tout sauf a-z
 }
 
-const ROLES_CREATION_TRANSACTION = ['president', 'tresorier', 'président', 'trésorier'];
+// Tous les rôles autorisés à créer des transactions
+const ROLES_AUTORISES_NORMALISES = ['president', 'tresorier'];
+
+function peutCreer(userData) {
+  if (!userData) return false;
+  const role = normaliserRole(userData.role);
+  console.log('[NouvelleTransaction] role normalisé:', role, '| brut:', userData.role);
+  return ROLES_AUTORISES_NORMALISES.includes(role);
+}
 
 export default function NouvelleTransactionScreen({ userData, navigation }) {
   const [form, setForm] = useState({
@@ -79,12 +86,18 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
   const busy = loading || uploadingJustificatif;
   const depasseSolde = form.type === 'sortie' && !soldeLoading && montantNum > soldeDisponible;
 
-  const peutCreerTransactions = useMemo(() => {
-    const roleUser = normaliserRole(userData?.role);
-    return ROLES_CREATION_TRANSACTION.some(
-      (r) => normaliserRole(r) === roleUser
+  const peutCreerTransactions = peutCreer(userData);
+
+  useEffect(() => {
+    console.log(
+      '[NouvelleTransaction] userData reçu:',
+      JSON.stringify({
+        uid: userData?.uid,
+        role: userData?.role,
+        peutCreer: peutCreerTransactions,
+      })
     );
-  }, [userData?.role]);
+  }, [userData?.uid, userData?.role, peutCreerTransactions]);
 
   useEffect(() => {
     let alive = true;
@@ -247,6 +260,7 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
         categorie: form.categorie || 'Autre',
         chainTransactionId: transactionId,
         polygonTxHash: hash,
+        hash,
         cooperativeId: coopId,
         typeTransaction: typeTxFirestore,
         modePaiementFournisseur: form.type === 'sortie' ? form.modePaiement : null,

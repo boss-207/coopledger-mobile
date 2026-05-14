@@ -7,30 +7,14 @@ import { useVotes } from '../hooks/useBlockchain';
 import { polygonscanTxUrl, formatFCFA } from '../config/blockchain';
 import { collection, limit, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../config/firebase';
+import { calculerFinances, estEntree } from '../utils/calculsFinanciers';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
 
-/** Même règle que le registre : exclut rejeté / annulé ; inclut valide, en_cours, sans statut. */
-function transactionCompteePourSoldes(t) {
-  const s = t?.statut;
-  if (s === 'rejete' || s === 'rejeté' || s === 'annule' || s === 'annulé') return false;
-  return true;
-}
-
 function formatDate(d) {
   if (!d) return '';
   return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
-}
-
-function transactionDateMs(t) {
-  const d = t?.date;
-  if (d instanceof Date && !Number.isNaN(d.getTime())) return d.getTime();
-  if (d && typeof d.toDate === 'function') {
-    const x = d.toDate();
-    return Number.isNaN(x.getTime()) ? 0 : x.getTime();
-  }
-  return 0;
 }
 
 export default function DashboardScreen({ userData, navigation }) {
@@ -56,41 +40,30 @@ export default function DashboardScreen({ userData, navigation }) {
     const qTx = query(
       collection(db, 'transactions'),
       where('cooperativeId', '==', coopId),
-      limit(300)
+      limit(50)
     );
     const unsubTx = onSnapshot(qTx, (snap) => {
-      const data = snap.docs.map((d) => ({
-        id: d.id,
-        ...d.data(),
-        date: d.data().date?.toDate?.() || new Date(d.data().date || Date.now()),
-      }));
-      data.sort((a, b) => transactionDateMs(b) - transactionDateMs(a));
+      const data = snap.docs.map((d) => {
+        const raw = d.data();
+        const date = raw.date?.toDate?.()
+          ? raw.date.toDate()
+          : raw.date ? new Date(raw.date)
+          : raw.createdAt?.toDate?.() ? raw.createdAt.toDate()
+          : new Date(0);
+        return {
+          id: d.id,
+          ...raw,
+          date,
+          hash: raw.hash || raw.polygonTxHash || null,
+        };
+      }).sort((a, b) => b.date - a.date);
+
       setTransactions(data);
 
-      const validTx = data.filter(transactionCompteePourSoldes);
-      const entrees = ['cotisation', 'mobile_money', 'main_a_main', 'vente_recolte', 'subvention', 'remboursement'];
-      const sorties = ['depense'];
-
-      const rev = validTx
-        .filter(
-          (t) =>
-            entrees.includes(t.typeTransaction)
-            || t.type === 'entree'
-            || t.type === 'revenu'
-        )
-        .reduce((a, t) => a + Number(t.montant || 0), 0);
-
-      const dep = validTx
-        .filter(
-          (t) =>
-            sorties.includes(t.typeTransaction)
-            || t.type === 'sortie'
-        )
-        .reduce((a, t) => a + Number(t.montant || 0), 0);
-
+      const { revenus: rev, depenses: dep, solde: sol } = calculerFinances(data);
       setRevenus(rev);
       setDepenses(dep);
-      setSolde(rev - dep);
+      setSolde(sol);
       setTxLoading(false);
     }, () => {
       setTransactions([]);
@@ -372,13 +345,8 @@ function StatCard({ icon, label, value, color, bg }) {
   );
 }
 
-function txEstEntree(tx) {
-  const entrees = ['cotisation', 'mobile_money', 'main_a_main'];
-  return entrees.includes(tx.typeTransaction) || tx.type === 'entree' || tx.type === 'revenu';
-}
-
 function TxRow({ tx }) {
-  const isEntree = txEstEntree(tx);
+  const isEntree = estEntree(tx);
   const montant = Number(tx.montant || 0);
   const statutColors = { valide: GREEN, en_cours: '#d97706', rejete: '#dc2626', annule: '#6b7280' };
   const statutLabels = { valide: 'Validé', en_cours: 'Vote en cours', rejete: 'Rejeté', annule: 'Annulé' };

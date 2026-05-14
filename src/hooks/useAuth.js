@@ -70,6 +70,17 @@ export function useAuth() {
               setLoading(false);
               return;
             }
+            console.log(
+              '=== PROFIL FIRESTORE ===',
+              JSON.stringify({
+                uid: firebaseUser.uid,
+                email: firebaseUser.email,
+                role: profile.role,
+                roleType: typeof profile.role,
+                roleLength: profile.role?.length,
+                charCodes: profile.role ? [...profile.role].map((c) => c.charCodeAt(0)) : [],
+              })
+            );
             setUserData({ uid: firebaseUser.uid, ...profile });
           } else {
             setUserData(null);

@@ -25,6 +25,15 @@ export default function App() {
   useNotifications({ userData, navigationRef });
 
   useEffect(() => {
+    if (!userData?.uid) return;
+    import('./src/hooks/useNotifications').then((mod) => {
+      if (typeof mod.refreshExpoPushToken === 'function') {
+        mod.refreshExpoPushToken();
+      }
+    });
+  }, [userData?.uid]);
+
+  useEffect(() => {
     if (Platform.OS !== 'android') return;
     (async () => {
       try {

@@ -9,22 +9,15 @@ import {
   onSnapshot,
   query,
   where,
-  orderBy,
   limit,
 } from 'firebase/firestore';
 import { polygonscanTxUrl } from '../config/blockchain';
 import { db } from '../config/firebase';
 import { getBadgeType, TYPES_TRANSACTION } from '../utils/transactionTypes';
+import { calculerFinances } from '../utils/calculsFinanciers';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
-
-/** Tx prises en compte pour solde / revenus / dépenses (exclut rejeté, annulé). */
-function transactionCompteePourSoldes(t) {
-  const s = t?.statut;
-  if (s === 'rejete' || s === 'rejeté' || s === 'annule' || s === 'annulé') return false;
-  return true;
-}
 
 function formatDateShort(d) {
   if (!d) return '';
@@ -104,37 +97,34 @@ export default function HistoriqueScreen({ userData }) {
     const q = query(
       collection(db, 'transactions'),
       where('cooperativeId', '==', coopId),
-      orderBy('date', 'desc'),
-      limit(100)
+      limit(200)
     );
     const unsub = onSnapshot(
       q,
       (snap) => {
-        const data = snap.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-          date: d.data().date?.toDate?.() || new Date(d.data().date || Date.now()),
-        }));
+        const data = snap.docs.map((d) => {
+          const raw = d.data();
+          const date = raw.date?.toDate?.()
+            ? raw.date.toDate()
+            : raw.date
+            ? new Date(raw.date)
+            : raw.createdAt?.toDate?.()
+            ? raw.createdAt.toDate()
+            : new Date(0);
+          return {
+            id: d.id,
+            ...raw,
+            date,
+            hash: raw.hash || raw.polygonTxHash || null,
+          };
+        }).sort((a, b) => b.date - a.date);
+
         setTransactions(data);
 
-        const valides = data.filter(transactionCompteePourSoldes);
-        const entrees = ['cotisation', 'mobile_money', 'main_a_main', 'vente_recolte', 'subvention', 'remboursement'];
-        const rev = valides
-          .filter((t) =>
-            entrees.includes(t.typeTransaction)
-            || t.type === 'entree'
-            || t.type === 'revenu')
-          .reduce((a, t) => a + (t.montant || 0), 0);
-        const dep = valides
-          .filter((t) =>
-            t.typeTransaction === 'depense'
-            || t.type === 'sortie'
-            || t.type === 'depense')
-          .reduce((a, t) => a + (t.montant || 0), 0);
-
-        setRevenus(rev);
-        setDepenses(dep);
-        setSolde(rev - dep);
+        const { revenus, depenses, solde } = calculerFinances(data);
+        setSolde(solde);
+        setRevenus(revenus);
+        setDepenses(depenses);
         setLoading(false);
       },
       () => {
@@ -152,7 +142,15 @@ export default function HistoriqueScreen({ userData }) {
     let data = [...transactions];
     if (activeFilter === 'revenu') data = data.filter((t) => t.type === 'revenu' || t.type === 'entree');
     else if (activeFilter === 'depense') data = data.filter((t) => t.type === 'depense' || t.type === 'sortie');
-    else if (activeFilter === 'en_cours') data = data.filter((t) => t.statut === 'en_cours');
+    else if (activeFilter === 'en_cours') {
+      data = data.filter(
+        (t) =>
+          t.statut === 'en_cours'
+          || t.statut === 'confirme'
+          || !t.statut
+          || t.statut === ''
+      );
+    }
     if (activeTypeFilter !== 'tous') {
       data = data.filter((t) => resolveTypeTransaction(t, metaFromTx(t)) === activeTypeFilter);
     }

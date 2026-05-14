@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
   addDoc,
   collection,
   getDocs,
+  limit,
   onSnapshot,
   orderBy,
   query,
@@ -20,6 +21,7 @@ import {
   where,
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
+import { calculerFinances, estEntree } from '../utils/calculsFinanciers';
 
 const RESEND_API_KEY = process.env.EXPO_PUBLIC_RESEND_KEY;
 
@@ -81,14 +83,16 @@ function getMonthLabel(date) {
 }
 
 function normalizeTx(docData) {
-  const date = toDateSafe(docData.date);
+  const date = toDateSafe(docData.date) || toDateSafe(docData.createdAt) || toDateSafe(docData.timestamp);
   return {
+    id: docData.id,
     titre: docData.titre || 'Transaction',
     montant: Number(docData.montant || 0),
-    type: docData.type || 'sortie',
-    statut: docData.statut || 'en_cours',
+    type: docData.type || '',
+    typeTransaction: docData.typeTransaction || '',
+    statut: docData.statut || '',
     date,
-    hash: docData.hash || null,
+    hash: docData.polygonTxHash || docData.hash || null,
     categorie: docData.categorie || 'Autre',
   };
 }
@@ -236,7 +240,7 @@ function DonutChart({ revenus, depenses }) {
 }
 
 function TxItem({ tx }) {
-  const isEntree = tx.type === 'entree' || tx.type === 'revenu';
+  const isEntree = estEntree(tx);
   const statutColor = tx.statut === 'valide' ? GREEN : tx.statut === 'rejete' ? RED : '#d97706';
   const hashShort = tx.hash ? `${tx.hash.slice(0, 10)}...${tx.hash.slice(-6)}` : 'N/A';
   const icon = CATEGORY_ICONS[tx.categorie] || '📦';
@@ -272,11 +276,20 @@ export default function RapportScreen({ userData }) {
     let txLoaded = false;
     let votesLoaded = false;
 
-    const txQuery = query(collection(db, 'transactions'), orderBy('date', 'desc'));
+    const coopId = userData?.cooperativeId || 'broukou';
+    const txQuery = query(
+      collection(db, 'transactions'),
+      where('cooperativeId', '==', coopId),
+      limit(500)
+    );
     const unsubTx = onSnapshot(
       txQuery,
       (snap) => {
-        const data = snap.docs.map((d) => normalizeTx(d.data()));
+        const data = snap.docs.map((d) => normalizeTx({ id: d.id, ...d.data() })).sort((a, b) => {
+          const ta = a.date ? a.date.getTime() : 0;
+          const tb = b.date ? b.date.getTime() : 0;
+          return tb - ta;
+        });
         setTransactions(data);
         txLoaded = true;
         if (txLoaded && votesLoaded) setLoading(false);
@@ -306,7 +319,7 @@ export default function RapportScreen({ userData }) {
       unsubTx();
       unsubVotes();
     };
-  }, []);
+  }, [userData?.cooperativeId]);
 
   const computed = useMemo(() => {
     const { start, end } = getMonthRange(selectedMonthMode);
@@ -315,14 +328,14 @@ export default function RapportScreen({ userData }) {
     const txMonth = transactions.filter((t) => inRange(t.date, start, end));
     const votesMonth = votes.filter((v) => inRange(v.date, start, end));
 
-    const txValidees = txMonth.filter((t) => t.statut === 'valide');
-    const totalEntrees = txValidees
-      .filter((t) => t.type === 'entree' || t.type === 'revenu')
-      .reduce((acc, t) => acc + t.montant, 0);
-    const totalDepenses = txValidees
-      .filter((t) => t.type === 'sortie' || t.type === 'depense')
-      .reduce((acc, t) => acc + t.montant, 0);
+    const { revenus: totalEntrees, depenses: totalDepenses } = calculerFinances(transactions, { start, end });
     const soldeMois = totalEntrees - totalDepenses;
+
+    const txValidees = transactions.filter((t) => {
+      const date = t.date;
+      return date && date >= start && date < end;
+    });
+    const txValideesCount = txValidees.filter((t) => t.statut === 'valide').length;
 
     const votesApprouves = votesMonth.filter((v) => v.statut === 'approuve').length;
     const votesRejetes = votesMonth.filter((v) => v.statut === 'rejete').length;
@@ -378,15 +391,21 @@ Destinataires: IFAD, Banques partenaires, Ministère de l'Agriculture.`;
     await Share.share({ message });
   };
 
-  const handleSendEmail = async () => {
-    if (sendingEmail) return;
+  const sendingLock = useRef(false);
+
+  const envoyerEmail = useCallback(async ({ skipUserAlerts = false } = {}) => {
+    if (sendingLock.current) return;
     if (!RESEND_API_KEY) {
-      Alert.alert(
-        'Configuration manquante',
-        'Définissez EXPO_PUBLIC_RESEND_KEY dans votre fichier .env puis redémarrez Expo.'
-      );
-      return;
+      if (!skipUserAlerts) {
+        Alert.alert(
+          'Configuration manquante',
+          'Définissez EXPO_PUBLIC_RESEND_KEY dans votre fichier .env puis redémarrez Expo.'
+        );
+      }
+      throw new Error('EXPO_PUBLIC_RESEND_KEY manquant');
     }
+
+    sendingLock.current = true;
     setSendingEmail(true);
 
     try {
@@ -512,16 +531,59 @@ Destinataires: IFAD, Banques partenaires, Ministère de l'Agriculture.`;
         }
       );
 
-      Alert.alert(
-        '✅ Rapport envoyé !',
-        `${envoyes}/${destinataires.length} emails envoyés avec succès.\n`
-          + `Rapport de ${nomMois} ${annee}.`
-      );
+      if (!skipUserAlerts) {
+        Alert.alert(
+          '✅ Rapport envoyé !',
+          `${envoyes}/${destinataires.length} emails envoyés avec succès.\n`
+            + `Rapport de ${nomMois} ${annee}.`
+        );
+      }
     } catch (err) {
-      Alert.alert('❌ Erreur', err?.message || 'Envoi impossible.');
+      if (!skipUserAlerts) {
+        Alert.alert('❌ Erreur', err?.message || 'Envoi impossible.');
+      } else {
+        console.warn('[Rapport] envoyerEmail:', err?.message || err);
+      }
+      throw err;
+    } finally {
+      sendingLock.current = false;
+      setSendingEmail(false);
     }
-    setSendingEmail(false);
+  }, [userData, selectedMonthMode, computed]);
+
+  const handleSendEmail = () => {
+    void envoyerEmail({ skipUserAlerts: false });
   };
+
+  // ─── ENVOI AUTO EN MODE TEST (toutes les 2 minutes) ──────────────────────────
+  useEffect(() => {
+    const MODE_TEST_AUTO_RAPPORT = __DEV__;
+    const INTERVALLE_MINUTES = 2;
+
+    if (!MODE_TEST_AUTO_RAPPORT) return;
+    if (!userData?.email) return;
+
+    console.log(`[Rapport Auto] Activé — envoi toutes les ${INTERVALLE_MINUTES} min`);
+
+    const envoyerAuto = async () => {
+      if (loading) return;
+      console.log('[Rapport Auto] Envoi automatique...');
+      try {
+        await envoyerEmail({ skipUserAlerts: true });
+        console.log('[Rapport Auto] ✅ Envoyé');
+      } catch (e) {
+        console.warn('[Rapport Auto] Erreur:', e?.message || e);
+      }
+    };
+
+    const firstTimeout = setTimeout(envoyerAuto, 10_000);
+    const interval = setInterval(envoyerAuto, INTERVALLE_MINUTES * 60 * 1000);
+
+    return () => {
+      clearTimeout(firstTimeout);
+      clearInterval(interval);
+    };
+  }, [userData?.email, loading, envoyerEmail]);
 
   if (loading) {
     return (

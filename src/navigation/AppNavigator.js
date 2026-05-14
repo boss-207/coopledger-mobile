@@ -54,23 +54,28 @@ function VideOngletNouvelleTx() {
 
 function BoutonOngletNouvelleTransaction({ userData, ...props }) {
   const navigation = useNavigation();
-  if (userData?.role === 'membre' || userData?.role === 'institution') {
+  const roleNorm = userData?.role
+    ? String(userData.role)
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z]/g, '')
+    : null;
+
+  // Cache le bouton UNIQUEMENT pour membre et institution,
+  // et quand userData est encore en chargement (null) on affiche quand même
+  const doitCacher = roleNorm === 'membre' || roleNorm === 'institution';
+  if (doitCacher) {
     return <View style={[{ flex: 1 }, props.style]} />;
   }
+  // Pour président, trésorier, et null (chargement) : affiche le bouton
   return (
     <TouchableOpacity
       activeOpacity={0.88}
       accessibilityRole="button"
       {...props}
       onPress={() => navigation.navigate('Accueil', { screen: 'NouvelleTransaction' })}
-      style={[
-        props.style,
-        {
-          flex: 1,
-          justifyContent: 'center',
-          alignItems: 'center',
-        },
-      ]}
+      style={[props.style, { flex: 1, justifyContent: 'center', alignItems: 'center' }]}
     >
       <View
         style={{
@@ -122,12 +127,7 @@ function DashboardStack({ userData }) {
           headerTitleStyle: { fontWeight: '800', fontSize: 16 },
         }}
       >
-        {({ route, navigation, userData: userDataProp }) => (
-          <NouvelleTransactionScreen
-            userData={route.params?.userData || userDataProp || userData}
-            navigation={navigation}
-          />
-        )}
+        {props => <NouvelleTransactionScreen {...props} userData={userData} />}
       </Stack.Screen>
       <Stack.Screen
         name="MainAMain"
