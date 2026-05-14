@@ -101,6 +101,18 @@ function DashboardStack({ userData }) {
         {props => <DashboardScreen {...props} userData={userData} />}
       </Stack.Screen>
       <Stack.Screen
+        name="Membres"
+        options={{
+          headerShown: true,
+          headerTitle: '👥 Membres',
+          headerStyle: { backgroundColor: GREEN_DARK },
+          headerTintColor: '#fff',
+          headerTitleStyle: { fontWeight: '800', fontSize: 16 },
+        }}
+      >
+        {props => <MembresScreen {...props} userData={userData} />}
+      </Stack.Screen>
+      <Stack.Screen
         name="NouvelleTransaction"
         options={{
           headerShown: true,
@@ -110,7 +122,12 @@ function DashboardStack({ userData }) {
           headerTitleStyle: { fontWeight: '800', fontSize: 16 },
         }}
       >
-        {props => <NouvelleTransactionScreen {...props} userData={userData} />}
+        {({ route, navigation, userData: userDataProp }) => (
+          <NouvelleTransactionScreen
+            userData={route.params?.userData || userDataProp || userData}
+            navigation={navigation}
+          />
+        )}
       </Stack.Screen>
       <Stack.Screen
         name="MainAMain"
@@ -238,7 +255,7 @@ export default function AppNavigator({ userData }) {
           tabBarIcon: ({ focused }) => <TabIcon emoji="📋" label="Registre" focused={focused} />,
         }}
       >
-        {() => <HistoriqueScreen />}
+        {() => <HistoriqueScreen userData={userData} />}
       </Tab.Screen>
 
       <Tab.Screen

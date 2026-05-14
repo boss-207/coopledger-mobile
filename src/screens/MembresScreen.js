@@ -122,14 +122,12 @@ function MemberRow({
   member,
   voteCount,
   isPresidentRow,
-  onChangeRole,
   canManage,
   onPressExclure,
   onPressReintegrer,
   showExclure,
   showReintegrer,
 }) {
-  const color = ROLE_COLORS[member.role] || GREEN;
   const st = member.statut;
   const labelStatut = statutMembreLabel(st);
 
@@ -141,9 +139,9 @@ function MemberRow({
 
       <View style={{ flex: 1 }}>
         <Text style={styles.memberName}>{member.nom || 'Membre'}</Text>
-        <View style={[styles.roleBadge, { backgroundColor: `${color}22` }]}>
-          <Text style={[styles.roleText, { color }]}>{ROLE_LABELS[member.role] || member.role}</Text>
-        </View>
+        {member.email ? (
+          <Text style={styles.memberEmail} numberOfLines={1}>{member.email}</Text>
+        ) : null}
         <Text style={styles.metaText}>Inscrit le {formatDate(member.dateInscription)}</Text>
         <View style={styles.metaRow}>
           <View style={[styles.dot, { backgroundColor: dotCouleurStatut(st) }]} />
@@ -157,9 +155,6 @@ function MemberRow({
 
       {canManage && !isPresidentRow ? (
         <View style={styles.actionsCol}>
-          <TouchableOpacity style={styles.editBtn} onPress={() => onChangeRole(member)}>
-            <Text style={styles.editBtnText}>✏️ Rôle</Text>
-          </TouchableOpacity>
           {showExclure ? (
             <TouchableOpacity style={styles.removeBtn} onPress={() => onPressExclure(member)}>
               <Text style={styles.removeBtnText}>🚫 Exclure</Text>
@@ -183,7 +178,7 @@ function membreDoitVoterSurCeVote(uid, vote) {
   return true;
 }
 
-export default function MembresScreen({ userData }) {
+export default function MembresScreen({ userData, navigation }) {
   const { votes: votesPolygonOuverts } = useVotes();
   const [users, setUsers] = useState([]);
   const [votesByUser, setVotesByUser] = useState({});
@@ -210,7 +205,6 @@ export default function MembresScreen({ userData }) {
   const [validationModalVisible, setValidationModalVisible] = useState(false);
   const [demandeAValider, setDemandeAValider] = useState(null);
   const [roleValidation, setRoleValidation] = useState('membre');
-  const [tempPassword, setTempPassword] = useState('');
   const [refusModalVisible, setRefusModalVisible] = useState(false);
   const [demandeARefuser, setDemandeARefuser] = useState(null);
   const [raisonRefus, setRaisonRefus] = useState('');
@@ -495,7 +489,6 @@ export default function MembresScreen({ userData }) {
   function ouvrirValidationDemande(demande) {
     setDemandeAValider(demande);
     setRoleValidation('membre');
-    setTempPassword(generateTempPassword(8));
     setValidationModalVisible(true);
   }
 
@@ -503,14 +496,6 @@ export default function MembresScreen({ userData }) {
     setDemandeARefuser(demande);
     setRaisonRefus('');
     setRefusModalVisible(true);
-  }
-
-  function copyTempPassword() {
-    if (!tempPassword) return;
-    Alert.alert(
-      'Mot de passe temporaire',
-      `${tempPassword}\n\nCopiez-le manuellement et transmettez-le au membre.`
-    );
   }
 
   async function confirmerRefusDemande() {
@@ -540,6 +525,14 @@ export default function MembresScreen({ userData }) {
     if (!demandeAValider) return;
     const roleChoisi = roleValidation || 'membre';
     const demande = demandeAValider;
+    const mdpMembre = String(demande.motDePasse || '').trim();
+    if (mdpMembre.length < 6) {
+      Alert.alert(
+        'Mot de passe manquant',
+        'Cette demande ne contient pas de mot de passe valide (min. 6 caractères). Le membre doit refaire une demande depuis l’application.'
+      );
+      return;
+    }
     setActionLoading(true);
     try {
       const wallet = ethers.Wallet.createRandom();
@@ -550,7 +543,7 @@ export default function MembresScreen({ userData }) {
         const validerDemandeCompte = httpsCallable(functions, 'validerDemandeCompte');
         const res = await validerDemandeCompte({
           email: String(demande.email || '').toLowerCase().trim(),
-          motDePasseTemporaire: tempPassword,
+          motDePasseTemporaire: mdpMembre,
           nom: demande.nom || '',
         });
         uidCree = res?.data?.uid || res?.data?.user?.uid || null;
@@ -569,7 +562,7 @@ export default function MembresScreen({ userData }) {
         const createRes = await createUserWithEmailAndPassword(
           auth,
           String(demande.email || '').toLowerCase().trim(),
-          tempPassword
+          mdpMembre
         );
         utiliseFallbackClient = true;
         uidCree = createRes?.user?.uid || null;
@@ -955,6 +948,17 @@ export default function MembresScreen({ userData }) {
         }
         ListHeaderComponent={
           <>
+            {navigation ? (
+              <TouchableOpacity
+                style={styles.membresBackRow}
+                onPress={() => navigation.goBack()}
+                accessibilityRole="button"
+                accessibilityLabel="Retour"
+              >
+                <Text style={styles.membresBackText}>← Retour</Text>
+              </TouchableOpacity>
+            ) : null}
+
             {canManage && demandesEnAttente.length > 0 ? (
               <View style={styles.alertBannerDemandes}>
                 <Text style={styles.alertBannerTitle}>
@@ -1097,10 +1101,6 @@ export default function MembresScreen({ userData }) {
               voteCount={votesByUser[item.uid || item.id] || 0}
               isPresidentRow={item.role === 'president'}
               canManage={canManage}
-              onChangeRole={(m) => {
-                setSelectedMember(m);
-                setRoleModalVisible(true);
-              }}
               onPressExclure={ouvrirExclusion}
               onPressReintegrer={handleReintegrer}
               showExclure={canManage && estActifListe && item.role !== 'president'}
@@ -1434,18 +1434,6 @@ export default function MembresScreen({ userData }) {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.validationLabel}>Mot de passe temporaire</Text>
-            <View style={styles.tempPasswordRow}>
-              <TextInput
-                style={styles.tempPasswordInput}
-                value={tempPassword}
-                editable={false}
-              />
-              <TouchableOpacity style={styles.tempCopyBtn} onPress={copyTempPassword}>
-                <Text style={styles.tempCopyText}>Copier</Text>
-              </TouchableOpacity>
-            </View>
-
             <TouchableOpacity
               style={[styles.btnValidationConfirm, actionLoading && { opacity: 0.6 }]}
               onPress={confirmerValidationDemande}
@@ -1557,6 +1545,13 @@ export default function MembresScreen({ userData }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8fafc' },
+  membresBackRow: {
+    alignSelf: 'flex-start',
+    marginBottom: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  membresBackText: { fontSize: 16, fontWeight: '800', color: GREEN_DARK },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc' },
   loadingText: { marginTop: 10, color: '#6b7280' },
   errorBanner: {
@@ -1747,6 +1742,7 @@ const styles = StyleSheet.create({
   },
   avatarText: { color: GREEN_DARK, fontWeight: '900' },
   memberName: { fontSize: 15, fontWeight: '800', color: '#111827' },
+  memberEmail: { fontSize: 12, color: '#6b7280', marginTop: 2 },
   roleBadge: { alignSelf: 'flex-start', borderRadius: 14, paddingHorizontal: 10, paddingVertical: 4, marginTop: 4 },
   roleText: { fontSize: 11, fontWeight: '800' },
   metaText: { color: '#6b7280', fontSize: 11, marginTop: 3 },

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db, auth } from '../config/firebase';
 
 Notifications.setNotificationHandler({
@@ -95,10 +95,14 @@ async function enregistrerNotifications() {
     console.log('Token:', token);
 
     if (auth.currentUser) {
-      await updateDoc(doc(db, 'users', auth.currentUser.uid), {
-        expoPushToken: token,
-        fcmTokenUpdatedAt: new Date(),
-      });
+      const userRef = doc(db, 'users', auth.currentUser.uid);
+      const snap = await getDoc(userRef);
+      if (snap.exists()) {
+        await updateDoc(userRef, {
+          expoPushToken: token,
+          fcmTokenUpdatedAt: new Date(),
+        });
+      }
     }
 
     return token;

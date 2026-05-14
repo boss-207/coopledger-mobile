@@ -1,13 +1,50 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Alert } from 'react-native';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  setDoc,
+  where,
+} from 'firebase/firestore';
 import { auth, db } from '../config/firebase';
 
 export function useAuth() {
   const [user, setUser] = useState(null);
   const [userData, setUserData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [demandeEnAttente, setDemandeEnAttente] = useState(false);
+  const [demandeEnAttenteInfo, setDemandeEnAttenteInfo] = useState(null);
+
+  const refreshSession = useCallback(async () => {
+    const u = auth.currentUser;
+    if (!u) return;
+    try {
+      const userRef = doc(db, 'users', u.uid);
+      const snap = await getDoc(userRef);
+      if (snap.exists()) {
+        const profile = snap.data();
+        const st = profile.statut;
+        if (st === 'inactif' || st === 'exclu') {
+          await signOut(auth);
+          setUser(null);
+          setUserData(null);
+          setDemandeEnAttente(false);
+          setDemandeEnAttenteInfo(null);
+          return;
+        }
+        setUserData({ uid: u.uid, ...profile });
+        setDemandeEnAttente(false);
+        setDemandeEnAttenteInfo(null);
+      }
+    } catch (e) {
+      console.error('refreshSession:', e);
+    }
+  }, []);
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -18,6 +55,8 @@ export function useAuth() {
           if (userSnap.exists()) {
             const profile = userSnap.data();
             const st = profile.statut;
+            setDemandeEnAttente(false);
+            setDemandeEnAttenteInfo(null);
             if (st === 'inactif' || st === 'exclu') {
               Alert.alert(
                 'Accès refusé',
@@ -33,35 +72,91 @@ export function useAuth() {
             }
             setUserData({ uid: firebaseUser.uid, ...profile });
           } else {
-            const defaultProfile = {
-              uid: firebaseUser.uid,
-              email: firebaseUser.email,
-              nom: firebaseUser.email.split('@')[0],
-              role: 'membre',
-              cooperativeId: 'broukou',
-              dateInscription: new Date(),
-              statut: 'actif',
-            };
-            await setDoc(userRef, defaultProfile);
-            setUserData(defaultProfile);
+            setUserData(null);
+            if (!firebaseUser.email) {
+              setDemandeEnAttente(false);
+              setDemandeEnAttenteInfo(null);
+              await signOut(auth);
+              setUser(null);
+              setLoading(false);
+              return;
+            }
+
+            const demandeValideeSnap = await getDocs(
+              query(
+                collection(db, 'demandes_compte'),
+                where('email', '==', firebaseUser.email),
+                where('statut', '==', 'validee')
+              )
+            );
+
+            if (!demandeValideeSnap.empty) {
+              const demande = demandeValideeSnap.docs[0].data();
+              const profil = {
+                uid: firebaseUser.uid,
+                email: firebaseUser.email,
+                nom: demande.nom || firebaseUser.email.split('@')[0],
+                role: demande.roleChoisi || 'membre',
+                cooperativeId: demande.cooperativeId || 'broukou',
+                statut: 'actif',
+                dateInscription: new Date(),
+              };
+              await setDoc(userRef, profil);
+              setUserData({ uid: firebaseUser.uid, ...profil });
+              setDemandeEnAttente(false);
+              setDemandeEnAttenteInfo(null);
+            } else {
+              const demandeAttenteSnap = await getDocs(
+                query(
+                  collection(db, 'demandes_compte'),
+                  where('email', '==', firebaseUser.email),
+                  where('statut', '==', 'en_attente')
+                )
+              );
+
+              if (!demandeAttenteSnap.empty) {
+                const d = demandeAttenteSnap.docs[0];
+                setDemandeEnAttenteInfo({ id: d.id, ...d.data() });
+                setDemandeEnAttente(true);
+              } else {
+                setDemandeEnAttente(false);
+                setDemandeEnAttenteInfo(null);
+                await signOut(auth);
+                setUser(null);
+              }
+            }
+            setLoading(false);
+            return;
           }
         } catch (err) {
           console.error('Erreur profil:', err);
-          setUserData({
-            uid: firebaseUser.uid,
-            email: firebaseUser.email,
-            nom: firebaseUser.email.split('@')[0],
-            role: 'membre',
-          });
+          setDemandeEnAttente(false);
+          setDemandeEnAttenteInfo(null);
+          try {
+            await signOut(auth);
+          } catch {
+            /* ignore */
+          }
+          setUser(null);
+          setUserData(null);
         }
       } else {
         setUser(null);
         setUserData(null);
+        setDemandeEnAttente(false);
+        setDemandeEnAttenteInfo(null);
       }
       setLoading(false);
     });
     return () => unsub();
   }, []);
 
-  return { user, userData, loading };
+  return {
+    user,
+    userData,
+    loading,
+    demandeEnAttente,
+    demandeEnAttenteInfo,
+    refreshSession,
+  };
 }

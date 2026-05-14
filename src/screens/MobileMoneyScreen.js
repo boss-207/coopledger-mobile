@@ -27,6 +27,25 @@ const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
 const DUREE_MAX = 180;
 
+const OPERATEURS = [
+  {
+    key: 'MOOV',
+    label: 'Moov Flooz',
+    couleur: '#0066CC',
+    fond: '#e8f0fe',
+    emoji: '🔵',
+    prefixes: [93, 94, 95, 96],
+  },
+  {
+    key: 'TMONEY',
+    label: 'T-Money',
+    couleur: '#E30613',
+    fond: '#fde8ea',
+    emoji: '🔴',
+    prefixes: [90, 91, 92, 97, 98, 99],
+  },
+];
+
 export default function MobileMoneyScreen({ navigation, userData }) {
   const coopId = userData?.cooperativeId || 'broukou';
   const [montant, setMontant] = useState('');
@@ -219,6 +238,12 @@ export default function MobileMoneyScreen({ navigation, userData }) {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <View style={styles.demoBanner}>
+        <Text style={styles.demoBannerText}>
+          🧪 Mode démo — Paiement simulé (FedaPay sandbox contourné pour la démo)
+        </Text>
+      </View>
+
       <Text style={styles.title}>Paiement Mobile Money</Text>
       <Text style={styles.subtitle}>Moov Flooz (Togo) et T-Money (Togocom)</Text>
 
@@ -256,22 +281,23 @@ export default function MobileMoneyScreen({ navigation, userData }) {
       <View style={styles.section}>
         <Text style={styles.label}>Opérateur</Text>
         <View style={styles.row}>
-          <TouchableOpacity
-            style={[styles.operatorBtn, operateurSelectionne === 'MOOV' && styles.operatorBtnActive]}
-            onPress={() => setOperateurSelectionne('MOOV')}
-          >
-            <Text style={[styles.operatorText, operateurSelectionne === 'MOOV' && styles.operatorTextActive]}>
-              MOOV (Flooz)
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.operatorBtn, operateurSelectionne === 'TMONEY' && styles.operatorBtnActive]}
-            onPress={() => setOperateurSelectionne('TMONEY')}
-          >
-            <Text style={[styles.operatorText, operateurSelectionne === 'TMONEY' && styles.operatorTextActive]}>
-              T-Money
-            </Text>
-          </TouchableOpacity>
+          {OPERATEURS.map((op) => {
+            const sel = operateurSelectionne === op.key;
+            return (
+              <TouchableOpacity
+                key={op.key}
+                style={[
+                  styles.operatorCard,
+                  { backgroundColor: op.fond, borderColor: sel ? op.couleur : `${op.couleur}44` },
+                  sel && { borderWidth: 2.5 },
+                ]}
+                onPress={() => setOperateurSelectionne(op.key)}
+              >
+                <Text style={styles.operatorEmoji}>{op.emoji}</Text>
+                <Text style={[styles.operatorName, { color: op.couleur }]}>{op.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
         <View style={styles.resumeBox}>
@@ -294,6 +320,20 @@ export default function MobileMoneyScreen({ navigation, userData }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8fafc' },
   content: { padding: 16, paddingBottom: 40 },
+  demoBanner: {
+    backgroundColor: '#fef3c7',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#f59e0b',
+  },
+  demoBannerText: {
+    fontSize: 12,
+    color: '#92400e',
+    textAlign: 'center',
+    fontWeight: '600',
+  },
   title: { fontSize: 24, fontWeight: '900', color: GREEN_DARK },
   subtitle: { fontSize: 13, color: '#6b7280', marginTop: 4, marginBottom: 14 },
   section: {
@@ -316,18 +356,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#f9fafb',
   },
   row: { flexDirection: 'row', gap: 8, marginTop: 4 },
-  operatorBtn: {
+  operatorCard: {
     flex: 1,
-    borderWidth: 1.5,
-    borderColor: '#d1d5db',
     borderRadius: 12,
+    borderWidth: 1.5,
     alignItems: 'center',
-    paddingVertical: 12,
-    backgroundColor: '#fff',
+    paddingVertical: 14,
+    paddingHorizontal: 8,
   },
-  operatorBtnActive: { borderColor: GREEN, backgroundColor: '#f0fdf4' },
-  operatorText: { color: '#374151', fontWeight: '700', fontSize: 13 },
-  operatorTextActive: { color: GREEN_DARK },
+  operatorEmoji: { fontSize: 22, marginBottom: 4 },
+  operatorName: { fontWeight: '900', fontSize: 13, textAlign: 'center' },
   resumeBox: {
     marginTop: 12,
     borderRadius: 10,

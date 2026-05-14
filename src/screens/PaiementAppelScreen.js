@@ -10,7 +10,15 @@ import {
   Linking,
   ScrollView,
 } from 'react-native';
-import { addDoc, arrayUnion, doc, increment, serverTimestamp, updateDoc } from 'firebase/firestore';
+import {
+  addDoc,
+  arrayUnion,
+  collection,
+  doc,
+  increment,
+  serverTimestamp,
+  updateDoc,
+} from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { creerTransaction, envoyerPromptPaiement, attendreConfirmation } from '../services/fedapay';
 import { formaterNumero } from '../utils/mobileMoneyUtils';

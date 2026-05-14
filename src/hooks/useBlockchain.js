@@ -43,7 +43,7 @@ function mapTransaction(t, index) {
   };
 }
 
-function mapVote(v, transactionId) {
+function mapVote(v, transactionId, creeParAddress = null) {
   const now = Date.now() / 1000;
   const expiresAt = Number(v.expiresAt);
   const statutNum = Number(v.statut);
@@ -62,6 +62,7 @@ function mapVote(v, transactionId) {
     statut,
     totalMembres: Number(v.totalMembresAuMomentDuVote),
     quorumRequis: 60,
+    creePar: creeParAddress ? String(creeParAddress).toLowerCase() : null,
   };
 }
 
@@ -122,7 +123,14 @@ export function useVotes() {
           const voteHasIndex = await contract.voteParTransaction(i);
           if (Number(voteHasIndex) > 0) {
             const rawVote = await contract.getVote(i);
-            fetchedVotes.push(mapVote(rawVote, i));
+            let creeParAddr = null;
+            try {
+              const txRow = await contract.getTransaction(i);
+              creeParAddr = txRow?.creePar ?? txRow?.[4] ?? null;
+            } catch {
+              creeParAddr = null;
+            }
+            fetchedVotes.push(mapVote(rawVote, i, creeParAddr));
           }
         } catch {
           // pas de vote pour cette transaction, on passe
@@ -169,7 +177,14 @@ export function useVote(transactionId) {
       setError(null);
       const contract = getContractReadOnly();
       const rawVote = await contract.getVote(transactionId);
-      setVote(mapVote(rawVote, transactionId));
+      let creeParAddr = null;
+      try {
+        const txRow = await contract.getTransaction(transactionId);
+        creeParAddr = txRow?.creePar ?? txRow?.[4] ?? null;
+      } catch {
+        creeParAddr = null;
+      }
+      setVote(mapVote(rawVote, transactionId, creeParAddr));
     } catch (err) {
       setError(parseBlockchainError(err));
     } finally {

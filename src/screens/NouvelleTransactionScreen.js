@@ -1,20 +1,48 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, ActivityIndicator, Alert, Linking, Image,
 } from 'react-native';
-import { doc, setDoc, Timestamp } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  getDocs,
+  query,
+  setDoc,
+  Timestamp,
+  where,
+} from 'firebase/firestore';
 import { useSendTransaction } from '../hooks/useBlockchain';
 import { polygonscanTxUrl } from '../config/blockchain';
 import { db } from '../config/firebase';
 import { selectImage, uploadJustificatif } from '../utils/uploadImage';
 import { getNombreMembres, getMembresActifs } from '../utils/getMembresActifs';
 import { calculerSolde, verifierSolde, formaterMontant } from '../utils/soldeUtils';
+import { envoyerNotifPush } from '../services/pushService';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
 
+const OPERATEURS_DEPENSE = [
+  { key: 'MOOV', label: 'Moov Flooz', couleur: '#0066CC', fond: '#e8f0fe', emoji: '🔵' },
+  { key: 'TMONEY', label: 'T-Money', couleur: '#E30613', fond: '#fde8ea', emoji: '🔴' },
+];
+
 const CATEGORIES = ['Achat intrants', 'Équipement', 'Formation', 'Transport', 'Cotisations', 'Autre'];
+
+/** Rôle comparable : minuscules, sans accents ni ponctuation parasite. */
+function normaliserRole(role) {
+  if (!role) return '';
+  return String(role)
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z]/g, '');
+}
+
+const ROLES_CREATION_TRANSACTION = ['president', 'tresorier', 'président', 'trésorier'];
 
 export default function NouvelleTransactionScreen({ userData, navigation }) {
   const [form, setForm] = useState({
@@ -26,6 +54,11 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
     description: '',
     modePaiement: 'mobile_money',
     telephoneFournisseur: '',
+    operateurMobile: 'MOOV',
+    numeroCarte: '',
+    dateExpirationCarte: '',
+    cvvCarte: '',
+    reseauPaiement: 'visa',
     sourceRevenu: 'cotisation_membre',
     payeurNom: '',
     telephonePayeur: '',
@@ -45,6 +78,13 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
   const needsVote = montantNum >= 500000;
   const busy = loading || uploadingJustificatif;
   const depasseSolde = form.type === 'sortie' && !soldeLoading && montantNum > soldeDisponible;
+
+  const peutCreerTransactions = useMemo(() => {
+    const roleUser = normaliserRole(userData?.role);
+    return ROLES_CREATION_TRANSACTION.some(
+      (r) => normaliserRole(r) === roleUser
+    );
+  }, [userData?.role]);
 
   useEffect(() => {
     let alive = true;
@@ -94,13 +134,34 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
   }
 
   async function soumettre() {
+    if (userData == null) {
+      Alert.alert('Chargement', 'Ton profil est encore en cours de chargement. Réessaie dans un instant.');
+      return;
+    }
+    if (!peutCreerTransactions) {
+      Alert.alert(
+        'Accès refusé',
+        'Seuls le président et le trésorier\npeuvent créer des transactions.'
+      );
+      return;
+    }
     if (!form.titre.trim()) return Alert.alert('Erreur', 'Entre le titre de la transaction.');
     if (!form.montant || montantNum <= 0) return Alert.alert('Erreur', 'Entre un montant valide.');
     if (justificatifUri && !userData?.uid) {
       return Alert.alert('Connexion requise', 'Connecte-toi pour joindre un justificatif (identifiant membre).');
     }
 
+    if (form.type === 'sortie' && form.modePaiement === 'especes' && !justificatifUri) {
+      return Alert.alert(
+        'Erreur',
+        '📸 Photo du reçu signé obligatoire pour un paiement en espèces.'
+      );
+    }
+
     if (form.type === 'sortie' && form.modePaiement === 'mobile_money') {
+      if (!form.operateurMobile) {
+        return Alert.alert('Erreur', 'Sélectionne Moov Flooz ou T-Money.');
+      }
       const tel = form.telephoneFournisseur.trim();
       if (tel.length < 8) {
         return Alert.alert(
@@ -109,6 +170,20 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
         );
       }
     }
+
+    if (form.type === 'sortie' && form.modePaiement === 'virement') {
+      const digits = form.numeroCarte.replace(/\D/g, '');
+      if (digits.length < 16) {
+        return Alert.alert('Erreur', 'Indique un numéro de carte à 16 chiffres (démo).');
+      }
+      if (!form.dateExpirationCarte.trim() || form.dateExpirationCarte.trim().length < 4) {
+        return Alert.alert('Erreur', 'Indique la date d’expiration (MM/AA).');
+      }
+      if (!form.cvvCarte.trim() || form.cvvCarte.trim().length < 3) {
+        return Alert.alert('Erreur', 'Indique le CVV (3 chiffres).');
+      }
+    }
+
     if (form.type === 'entree' && form.sourceRevenu === 'cotisation_membre' && !form.membreCotisationUid) {
       return Alert.alert('Erreur', 'Sélectionne le membre qui effectue la cotisation.');
     }
@@ -162,12 +237,31 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
       const scanUrl = polygonscanTxUrl(hash);
 
       const dossierFirestore = {
+        titre: titreComplet,
+        montant: montantNum,
+        type: form.type,
+        statut: 'valide',
+        date: Timestamp.fromDate(new Date()),
+        creePar: userData?.uid || null,
+        createurNom: userData?.nom || null,
+        categorie: form.categorie || 'Autre',
         chainTransactionId: transactionId,
         polygonTxHash: hash,
         cooperativeId: coopId,
         typeTransaction: typeTxFirestore,
         modePaiementFournisseur: form.type === 'sortie' ? form.modePaiement : null,
         telephoneFournisseur: form.type === 'sortie' ? (form.telephoneFournisseur.trim() || null) : null,
+        operateurMobile:
+          form.type === 'sortie' && form.modePaiement === 'mobile_money'
+            ? form.operateurMobile
+            : null,
+        paiementVirementDemo:
+          form.type === 'sortie' && form.modePaiement === 'virement'
+            ? {
+                reseau: form.reseauPaiement,
+                derniers4: form.numeroCarte.replace(/\D/g, '').slice(-4),
+              }
+            : null,
         sourceRevenu: form.type === 'entree' ? form.sourceRevenu : null,
         payeurNom: form.type === 'entree' ? (form.payeurNom.trim() || null) : null,
         telephonePayeur: form.type === 'entree' ? (form.telephonePayeur.trim() || null) : null,
@@ -247,6 +341,37 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
         );
       }
 
+      try {
+        const membresSnap = await getDocs(
+          query(
+            collection(db, 'users'),
+            where('cooperativeId', '==', coopId),
+            where('statut', '==', 'actif')
+          )
+        );
+        const tokens = membresSnap.docs
+          .map((d) => d.data().expoPushToken)
+          .filter(Boolean);
+
+        const depasse = voteDeclenche || montantNum >= 500000;
+
+        await envoyerNotifPush({
+          tokens,
+          titre: depasse
+            ? '🗳️ Vote requis !'
+            : '💰 Nouvelle transaction',
+          message: depasse
+            ? `${form.titre} — ${Math.round(montantNum).toLocaleString('fr-FR')} FCFA\nUn vote a été déclenché.`
+            : `${form.titre} — ${Math.round(montantNum).toLocaleString('fr-FR')} FCFA`,
+          data: {
+            type: depasse ? 'NEW_VOTE' : 'NEW_TRANSACTION',
+            cooperativeId: coopId,
+          },
+        });
+      } catch (notifErr) {
+        console.log('Notif error:', notifErr);
+      }
+
       const baseMsg = voteDeclenche
         ? `La transaction dépasse 500 000 FCFA.\n\nUn vote a été déclenché automatiquement sur Polygon (total membres figé à ce moment sur la chaîne).\n\nRéférence coopérative : ${totalMembresActifs} membre(s) actif(s) dans Firestore.\n\nHash : ${hashCourt}`
         : `Transaction confirmée sur Polygon Amoy.\n\nHash : ${hashCourt}`;
@@ -282,7 +407,34 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
     }
   }
 
-  if (userData?.role === 'membre' || userData?.role === 'institution') {
+  if (userData == null) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: '#f8fafc',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 24,
+        }}
+      >
+        <ActivityIndicator size="large" color={GREEN} />
+        <Text
+          style={{
+            marginTop: 16,
+            fontSize: 15,
+            fontWeight: '600',
+            color: '#475569',
+            textAlign: 'center',
+          }}
+        >
+          Chargement du profil…
+        </Text>
+      </View>
+    );
+  }
+
+  if (!peutCreerTransactions) {
     return (
       <View
         style={{
@@ -322,7 +474,7 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       <View style={{ padding: 20 }}>
-        {(userData?.role === 'tresorier' || userData?.role === 'president') && (
+        {peutCreerTransactions && (
           <TouchableOpacity
             style={styles.appelBtn}
             onPress={() => navigation.navigate('AppelDeFonds', { userData })}
@@ -556,6 +708,23 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
 
             {form.modePaiement === 'mobile_money' ? (
               <View>
+                <Text style={styles.label}>OPÉRATEUR</Text>
+                <View style={styles.paymentModeRow}>
+                  {OPERATEURS_DEPENSE.map((op) => (
+                    <TouchableOpacity
+                      key={op.key}
+                      style={[
+                        styles.operateurDepenseCard,
+                        { backgroundColor: op.fond, borderColor: form.operateurMobile === op.key ? op.couleur : `${op.couleur}44` },
+                        form.operateurMobile === op.key && { borderWidth: 2.5 },
+                      ]}
+                      onPress={() => update('operateurMobile', op.key)}
+                    >
+                      <Text style={styles.paymentModeEmoji}>{op.emoji}</Text>
+                      <Text style={[styles.operateurDepenseLabel, { color: op.couleur }]}>{op.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
                 <Text style={styles.label}>NUMÉRO MOBILE MONEY DU FOURNISSEUR</Text>
                 <View style={styles.inputBox}>
                   <TextInput
@@ -568,15 +737,84 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
                   />
                 </View>
                 <Text style={styles.hintSmall}>
-                  Le paiement sera effectué via FedaPay après validation du vote.
+                  Paiement simulé en démo (FedaPay). Flooz / T-Money : couleurs indicatives.
                 </Text>
+              </View>
+            ) : null}
+
+            {form.modePaiement === 'virement' ? (
+              <View style={{ marginTop: 8 }}>
+                <Text style={styles.hintSmallOrange}>
+                  Virement simulé pour la démo — aucune donnée bancaire réelle n’est transmise.
+                </Text>
+                <Text style={styles.label}>NUMÉRO DE CARTE (16 chiffres)</Text>
+                <View style={styles.inputBox}>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="0000 0000 0000 0000"
+                    placeholderTextColor="#9ca3af"
+                    keyboardType="number-pad"
+                    maxLength={19}
+                    value={form.numeroCarte}
+                    onChangeText={(v) => update('numeroCarte', v)}
+                  />
+                </View>
+                <Text style={styles.label}>EXPIRATION (MM/AA)</Text>
+                <View style={styles.inputBox}>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="12/28"
+                    placeholderTextColor="#9ca3af"
+                    value={form.dateExpirationCarte}
+                    onChangeText={(v) => update('dateExpirationCarte', v)}
+                  />
+                </View>
+                <Text style={styles.label}>CVV</Text>
+                <View style={styles.inputBox}>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="•••"
+                    placeholderTextColor="#9ca3af"
+                    secureTextEntry
+                    keyboardType="number-pad"
+                    maxLength={3}
+                    value={form.cvvCarte}
+                    onChangeText={(v) => update('cvvCarte', v)}
+                  />
+                </View>
+                <Text style={styles.label}>RÉSEAU</Text>
+                <View style={styles.paymentModeRow}>
+                  {[
+                    { key: 'visa', label: 'Visa' },
+                    { key: 'mastercard', label: 'Mastercard' },
+                    { key: 'paypal', label: 'PayPal' },
+                  ].map((r) => (
+                    <TouchableOpacity
+                      key={r.key}
+                      style={[
+                        styles.paymentModeBtn,
+                        form.reseauPaiement === r.key && styles.paymentModeBtnActive,
+                      ]}
+                      onPress={() => update('reseauPaiement', r.key)}
+                    >
+                      <Text
+                        style={[
+                          styles.paymentModeText,
+                          form.reseauPaiement === r.key && styles.paymentModeTextActive,
+                        ]}
+                      >
+                        {r.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               </View>
             ) : null}
 
             {form.modePaiement === 'especes' ? (
               <View style={styles.especesEncart}>
                 <Text style={styles.especesEncartText}>
-                  ⚠️ Paiement en espèces : un justificatif signé est obligatoire après le paiement.
+                  📸 Photo du reçu signé obligatoire — joignez le justificatif ci-dessous avant d’enregistrer.
                 </Text>
               </View>
             ) : null}
@@ -796,6 +1034,24 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   hintSmall: { fontSize: 12, color: '#6b7280', marginTop: 4 },
+  hintSmallOrange: {
+    fontSize: 12,
+    color: '#b45309',
+    marginBottom: 8,
+    lineHeight: 17,
+    fontWeight: '600',
+  },
+  operateurDepenseCard: {
+    flex: 1,
+    minWidth: '44%',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  operateurDepenseLabel: { fontSize: 13, fontWeight: '800', marginTop: 6, textAlign: 'center' },
   especesEncart: {
     backgroundColor: '#fef3c7',
     borderRadius: 10,

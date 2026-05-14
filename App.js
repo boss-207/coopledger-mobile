@@ -8,11 +8,19 @@ import { useNotifications } from './src/hooks/useNotifications';
 import LoginScreen from './src/screens/LoginScreen';
 import AppNavigator from './src/navigation/AppNavigator';
 import InstitutionDashboard from './src/screens/InstitutionDashboard';
+import DemandeEnAttenteScreen from './src/screens/DemandeEnAttenteScreen';
 
 const navigationRef = createNavigationContainerRef();
 
 export default function App() {
-  const { user, userData, loading } = useAuth();
+  const {
+    user,
+    userData,
+    loading,
+    demandeEnAttente,
+    demandeEnAttenteInfo,
+    refreshSession,
+  } = useAuth();
 
   useNotifications({ userData, navigationRef });
 
@@ -44,6 +52,12 @@ export default function App() {
         </View>
       ) : !user ? (
         <LoginScreen />
+      ) : !userData && demandeEnAttente ? (
+        <DemandeEnAttenteScreen
+          user={user}
+          demandeInfo={demandeEnAttenteInfo}
+          onSessionRefresh={refreshSession}
+        />
       ) : userData?.role === 'institution' ? (
         <InstitutionDashboard userData={userData} />
       ) : (

@@ -21,6 +21,8 @@ export default function LoginScreen() {
     telephone: '',
     message: '',
     password: '',
+    motDePasse: '',
+    motDePasseConf: '',
   });
   const [loading, setLoading] = useState(false);
 
@@ -43,9 +45,19 @@ export default function LoginScreen() {
     const email = form.email;
     const telephone = form.telephone;
     const message = form.message ?? '';
+    const mdp = String(form.motDePasse || '').trim();
+    const mdpConf = String(form.motDePasseConf || '').trim();
 
     if (!nom.trim() || !email.trim() || !telephone.trim()) {
       Alert.alert('Erreur', 'Tous les champs obligatoires doivent être remplis.');
+      return;
+    }
+    if (mdp.length < 6) {
+      Alert.alert('Erreur', 'Le mot de passe doit contenir au moins 6 caractères.');
+      return;
+    }
+    if (mdp !== mdpConf) {
+      Alert.alert('Erreur', 'Les deux mots de passe ne correspondent pas.');
       return;
     }
 
@@ -57,6 +69,7 @@ export default function LoginScreen() {
         telephone: telephone.trim(),
         cooperativeId: 'broukou',
         message: message.trim(),
+        motDePasse: mdp,
         statut: 'en_attente',
         dateDemande: serverTimestamp(),
         walletAddress: '',
@@ -72,6 +85,8 @@ export default function LoginScreen() {
         email: '',
         telephone: '',
         message: '',
+        motDePasse: '',
+        motDePasseConf: '',
       }));
     } catch (error) {
       console.error('Erreur:', error);
@@ -117,7 +132,7 @@ export default function LoginScreen() {
                       onPress={() => setMode(m)}
                     >
                       <Text style={[styles.tabText, mode === m && styles.tabTextActive]}>
-                        {m === 'connexion' ? 'Se connecter' : 'Demander un compte'}
+                        {m === 'connexion' ? 'Se connecter' : "S'inscrire maintenant"}
                       </Text>
                     </TouchableOpacity>
                   ))}
@@ -164,6 +179,20 @@ export default function LoginScreen() {
                       value={form.message}
                       onChangeText={(v) => update('message', v)}
                       multiline
+                    />
+                    <InputField
+                      icon="🔒"
+                      placeholder="Mot de passe (min. 6 caractères) *"
+                      value={form.motDePasse}
+                      onChangeText={(v) => update('motDePasse', v)}
+                      secureTextEntry
+                    />
+                    <InputField
+                      icon="🔒"
+                      placeholder="Confirmer le mot de passe *"
+                      value={form.motDePasseConf}
+                      onChangeText={(v) => update('motDePasseConf', v)}
+                      secureTextEntry
                     />
                   </>
                 )}

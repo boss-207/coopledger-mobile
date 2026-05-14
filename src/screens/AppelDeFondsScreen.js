@@ -16,6 +16,7 @@ import { addDoc, collection, getDocs, query, serverTimestamp, Timestamp, where }
 import { db } from '../config/firebase';
 import { selectImage, compressImage, uploadToCloudinary } from '../utils/uploadImage';
 import { getMembresActifs } from '../utils/getMembresActifs';
+import { envoyerNotifPush } from '../services/pushService';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
@@ -117,23 +118,36 @@ export default function AppelDeFondsScreen({ userData, navigation }) {
         totalAttendu: parseInt(montant, 10) * membres.length,
       });
 
-      setEtape('📣 Notifications...');
-      const usersSnap = await getDocs(query(collection(db, 'users'), where('cooperativeId', '==', coopId)));
-      const notifies = usersSnap.docs.filter((d) => !!d.data()?.fcmToken).length;
-      await addDoc(collection(db, 'notifications_queue'), {
-        type: 'appel_fonds',
-        titre: '💰 Appel de fonds !',
-        message: `${userData?.nom || 'Le trésorier'} demande ${parseInt(montant, 10).toLocaleString('fr-FR')} FCFA avant le ${dateEcheance.toLocaleDateString('fr-FR')}`,
-        cooperativeId: coopId,
-        createdAt: serverTimestamp(),
-      });
+      setEtape('📣 Notifications push...');
+      try {
+        const membresSnap = await getDocs(
+          query(
+            collection(db, 'users'),
+            where('cooperativeId', '==', coopId),
+            where('statut', '==', 'actif')
+          )
+        );
+        const tokens = membresSnap.docs
+          .map((d) => d.data().expoPushToken)
+          .filter(Boolean);
+
+        await envoyerNotifPush({
+          tokens,
+          titre: '💰 Appel de fonds !',
+          message:
+            `${userData?.nom || 'Le trésorier'} demande `
+            + `${parseInt(montant, 10).toLocaleString('fr-FR')} FCFA avant le ${dateAffichee}`,
+          data: { type: 'APPEL_FONDS', cooperativeId: coopId },
+        });
+      } catch (err) {
+        console.log('Notif error:', err);
+      }
 
       Alert.alert(
         '✅ Appel de fonds lancé !',
-        `${membres.length} membres ont été notifiés.`,
+        'Les membres avec un token Expo enregistré ont reçu une notification push.',
         [{ text: 'OK', onPress: () => navigation.goBack() }]
       );
-      void notifies;
     } catch (e) {
       Alert.alert('Erreur', e?.message || "Impossible de lancer l'appel de fonds.");
     } finally {

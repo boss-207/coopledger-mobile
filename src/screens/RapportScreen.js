@@ -261,7 +261,7 @@ function TxItem({ tx }) {
   );
 }
 
-export default function RapportScreen() {
+export default function RapportScreen({ userData }) {
   const [selectedMonthMode, setSelectedMonthMode] = useState(MONTH_MODE.current);
   const [transactions, setTransactions] = useState([]);
   const [votes, setVotes] = useState([]);
@@ -413,16 +413,16 @@ Destinataires: IFAD, Banques partenaires, Ministère de l'Agriculture.`;
       const membresSnap = await getDocs(
         query(
           collection(db, 'users'),
-          where('cooperativeId', '==', 'broukou'),
+          where('cooperativeId', '==', userData?.cooperativeId || 'broukou'),
           where('statut', '==', 'actif')
         )
       );
-      const destinataires = membresSnap.docs.map((d) => d.data().email).filter(Boolean);
+      const destinataires = membresSnap.docs
+        .map((d) => d.data().email)
+        .filter(Boolean);
 
-      if (destinataires.length === 0) {
-        Alert.alert('Info', 'Aucun membre avec email.');
-        setSendingEmail(false);
-        return;
+      if (destinataires.length === 0 && userData?.email) {
+        destinataires.push(userData.email);
       }
 
       const fmt = (n) => `${(n || 0).toLocaleString('fr-FR')} FCFA`;
@@ -470,43 +470,52 @@ Destinataires: IFAD, Banques partenaires, Ministère de l'Agriculture.`;
 </body></html>`;
 
       let envoyes = 0;
-      for (const email of destinataires) {
+      for (const emailDest of destinataires) {
+        if (!emailDest) continue;
         try {
-          const resp = await fetch('https://api.resend.com/emails', {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${RESEND_API_KEY}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              from: 'CoopLedger <onboarding@resend.dev>',
-              to: email,
-              subject: `📊 Rapport CoopLedger — ${nomMois} ${annee}`,
-              html,
-            }),
-          });
+          const resp = await fetch(
+            'https://api.resend.com/emails',
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${RESEND_API_KEY}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                from: 'CoopLedger <onboarding@resend.dev>',
+                to: emailDest,
+                subject: `📊 Rapport CoopLedger — ${nomMois} ${annee}`,
+                html,
+              }),
+            }
+          );
           if (resp.ok) envoyes += 1;
-          await new Promise((r) => setTimeout(r, 300));
+          await new Promise((r) => setTimeout(r, 400));
         } catch (err) {
-          console.error('Email error:', email, err);
+          console.error('Email error:', emailDest, err);
         }
       }
 
-      await addDoc(collection(db, 'rapports_envoyes'), {
-        mois,
-        annee,
-        nomMois,
-        cooperativeId: 'broukou',
-        totalEntrees: computed.totalEntrees,
-        totalDepenses: computed.totalDepenses,
-        solde: computed.soldeMois,
-        emailsEnvoyes: envoyes,
-        dateEnvoi: serverTimestamp(),
-      });
+      await addDoc(
+        collection(db, 'rapports_envoyes'),
+        {
+          mois,
+          annee,
+          nomMois,
+          cooperativeId: userData?.cooperativeId || 'broukou',
+          totalEntrees: computed.totalEntrees,
+          totalDepenses: computed.totalDepenses,
+          solde: computed.soldeMois,
+          emailsEnvoyes: envoyes,
+          totalDestinataires: destinataires.length,
+          dateEnvoi: serverTimestamp(),
+        }
+      );
 
       Alert.alert(
         '✅ Rapport envoyé !',
-        `${envoyes}/${destinataires.length} emails envoyés avec succès.`
+        `${envoyes}/${destinataires.length} emails envoyés avec succès.\n`
+          + `Rapport de ${nomMois} ${annee}.`
       );
     } catch (err) {
       Alert.alert('❌ Erreur', err?.message || 'Envoi impossible.');

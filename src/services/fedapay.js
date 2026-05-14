@@ -1,266 +1,229 @@
-const FEDAPAY_BASE_URL = 'https://sandbox-api.fedapay.com/v1';
-const FEDAPAY_API_KEY = process.env.EXPO_PUBLIC_FEDAPAY_KEY;
+/**
+ * FedaPay (sandbox) via proxy serveur — la clé secrète sk_ ne doit jamais être dans l’app.
+ * Configurez EXPO_PUBLIC_COOPLEDGER_API_URL + EXPO_PUBLIC_COOPLEDGER_PROXY_SECRET (même valeur que MOBILE_PROXY_SECRET sur le webhook).
+ * Sans proxy : repli sur une simulation locale (démo).
+ */
 
-const getHeaders = () => ({
-  Authorization: `Bearer ${FEDAPAY_API_KEY}`,
-  'Content-Type': 'application/json',
-  Accept: 'application/json',
-});
+const PROXY_BASE = (process.env.EXPO_PUBLIC_COOPLEDGER_API_URL || '').replace(/\/$/, '');
+const PROXY_SECRET = process.env.EXPO_PUBLIC_COOPLEDGER_PROXY_SECRET || '';
 
-async function fetchWithTimeout(url, options, ms = 30000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    return response;
-  } catch (err) {
-    clearTimeout(timer);
-    if (err.name === 'AbortError') {
-      throw new Error('Delai de connexion depasse');
-    }
-    throw err;
+/** @deprecated Conservé pour compat ; l’app n’appelle plus FedaPay directement avec une clé. */
+export const FEDAPAY_API_KEY =
+  process.env.EXPO_PUBLIC_FEDAPAY_PUBLIC_KEY
+  || process.env.EXPO_PUBLIC_FEDAPAY_KEY;
+
+async function proxyFetch(path, options = {}) {
+  if (!PROXY_BASE || !PROXY_SECRET) return null;
+  const url = `${PROXY_BASE}${path.startsWith('/') ? path : `/${path}`}`;
+  const headers = {
+    'X-CoopLedger-Secret': PROXY_SECRET,
+    ...options.headers,
+  };
+  if (options.body != null) {
+    headers['Content-Type'] = 'application/json';
   }
+  return fetch(url, {
+    ...options,
+    headers,
+  });
 }
 
-function lireMessageFedaPay(payload) {
-  if (!payload) return null;
-  if (typeof payload?.message === 'string' && payload.message.trim()) return payload.message.trim();
-  const errors = payload?.errors;
-  if (Array.isArray(errors) && errors.length > 0) {
-    const first = errors[0];
-    if (typeof first === 'string') return first;
-    if (typeof first?.message === 'string') return first.message;
-    if (typeof first?.description === 'string') return first.description;
-  }
-  if (typeof payload?.description === 'string' && payload.description.trim()) return payload.description.trim();
-  return null;
+function extractTransactionPayload(json) {
+  const root = json?.data ?? json?.v1?.data ?? json;
+  const tx = root?.transaction ?? root;
+  const id = tx?.id ?? tx?.transaction_id ?? root?.id;
+  const token = tx?.token ?? tx?.payment_token ?? tx?.payment_url ?? String(id ?? '');
+  const reference = tx?.reference ?? root?.reference ?? '';
+  const status = String(
+    tx?.status ?? tx?.state ?? root?.status ?? ''
+  ).toLowerCase();
+  return { id: id != null ? String(id) : '', token: token != null ? String(token) : '', reference, status };
 }
 
-function mapHttpError(status, payload) {
-  if (status === 401) return 'Cle API invalide';
-  if (status === 422) {
-    const details = lireMessageFedaPay(payload);
-    return details ? `Donnees invalides: ${details}` : 'Donnees invalides envoyees a FedaPay';
-  }
-  const details = lireMessageFedaPay(payload);
-  return details || `Erreur FedaPay (${status})`;
-}
-
-function parseStatutFedaPay(payload) {
-  const raw =
-    payload?.v1?.status ||
-    payload?.v1?.state ||
-    payload?.v1?.status_name ||
-    payload?.status ||
-    payload?.state ||
-    'pending';
-
-  const value = String(raw).toLowerCase();
-  if (value.includes('approved') || value.includes('success') || value.includes('completed')) return 'approved';
-  if (value.includes('declined') || value.includes('failed')) return 'declined';
-  if (value.includes('cancel')) return 'cancelled';
-  return 'pending';
-}
-
-function parseMontant(payload) {
-  return Number(payload?.v1?.amount ?? payload?.amount ?? 0);
-}
-
-function parseReference(payload) {
-  return (
-    payload?.v1?.reference ||
-    payload?.v1?.id ||
-    payload?.reference ||
-    payload?.id ||
-    ''
-  );
+async function simulerCreation(params) {
+  await new Promise((r) => setTimeout(r, 800));
+  const fakeId = `SIM_${Date.now()}`;
+  return {
+    success: true,
+    transactionId: fakeId,
+    token: fakeId,
+    error: null,
+  };
 }
 
 export async function creerTransaction(params) {
-  try {
-    if (!FEDAPAY_API_KEY) {
-      return {
-        success: false,
-        transactionId: '',
-        token: '',
-        error: 'Cle API FedaPay manquante (EXPO_PUBLIC_FEDAPAY_KEY)',
-      };
-    }
-    const nomComplet = String(params?.nom || '').trim();
-    const parts = nomComplet.split(/\s+/).filter(Boolean);
-    const firstname = parts[0] || 'Membre';
-    const lastname = parts.slice(1).join(' ') || '';
+  const res = await proxyFetch('/api/fedapay/transactions', {
+    method: 'POST',
+    body: JSON.stringify({
+      montant: params.montant,
+      description: params.description || '',
+      nom: params.nom,
+      email: params.email,
+      telephone: params.telephone,
+      cooperativeId: params.cooperativeId,
+    }),
+  });
 
-    const body = {
-      description: params.description,
-      amount: params.montant,
-      currency: { iso: 'XOF' },
-      callback_url: 'https://coopledger.app/callback',
-      customer: {
-        firstname,
-        lastname,
-        email: params.email,
-        phone_number: {
-          number: params.telephone,
-          country: 'tg',
-        },
-      },
-    };
-
-    const response = await fetchWithTimeout(`${FEDAPAY_BASE_URL}/transactions`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(body),
-    });
-
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      return {
-        success: false,
-        transactionId: '',
-        token: '',
-        error: mapHttpError(response.status, payload),
-      };
-    }
-
-    const transactionId = String(payload?.v1?.id || payload?.id || '');
-    const token = String(payload?.v1?.token || payload?.token || '');
-
-    if (!transactionId || !token) {
-      return {
-        success: false,
-        transactionId: '',
-        token: '',
-        error: 'Reponse FedaPay incomplete (id/token manquant)',
-      };
-    }
-
-    return {
-      success: true,
-      transactionId,
-      token,
-      error: null,
-    };
-  } catch (error) {
-    const msg = /Delai/.test(error?.message || '')
-      ? error.message
-      : 'Verifiez votre connexion';
-    return {
-      success: false,
-      transactionId: '',
-      token: '',
-      error: msg,
-    };
+  if (!res) {
+    console.warn(
+      '[FedaPay] Proxy non configuré (EXPO_PUBLIC_COOPLEDGER_API_URL + EXPO_PUBLIC_COOPLEDGER_PROXY_SECRET) — simulation.'
+    );
+    return simulerCreation(params);
   }
+
+  let json;
+  try {
+    json = await res.json();
+  } catch {
+    return { success: false, error: `Réponse invalide (${res.status})`, transactionId: null, token: null };
+  }
+
+  if (!res.ok) {
+    const msg = json?.message || json?.error || JSON.stringify(json);
+    return { success: false, error: msg || `HTTP ${res.status}`, transactionId: null, token: null };
+  }
+
+  const { id, token } = extractTransactionPayload(json);
+  if (!id) {
+    return { success: false, error: 'Réponse FedaPay sans identifiant de transaction', transactionId: null, token: null };
+  }
+
+  return {
+    success: true,
+    transactionId: id,
+    token: token || id,
+    error: null,
+  };
 }
 
 export async function envoyerPromptPaiement(token, methode, telephone = '') {
-  try {
-    const response = await fetchWithTimeout(`${FEDAPAY_BASE_URL}/transactions/${token}/${methode}`, {
+  const transactionId = token;
+  const res = await proxyFetch(
+    `/api/fedapay/transactions/${encodeURIComponent(transactionId)}/pay`,
+    {
       method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({
-        phone_number: telephone,
-      }),
-    });
-
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      return {
-        success: false,
-        message: '',
-        error: mapHttpError(response.status, payload),
-      };
+      body: JSON.stringify({ mode: methode, telephone }),
     }
+  );
 
+  if (!res) {
+    await new Promise((r) => setTimeout(r, 600));
     return {
       success: true,
-      message: lireMessageFedaPay(payload) || 'Prompt envoye',
+      message: `Prompt simulé (${methode}) sur ${telephone || '(numéro)'}`,
       error: null,
     };
-  } catch (error) {
-    return {
-      success: false,
-      message: '',
-      error: /Delai/.test(error?.message || '') ? error.message : 'Verifiez votre connexion',
-    };
   }
-}
 
-export async function verifierStatut(transactionId) {
+  let json;
   try {
-    const response = await fetchWithTimeout(`${FEDAPAY_BASE_URL}/transactions/${transactionId}`, {
-      method: 'GET',
-      headers: getHeaders(),
-    });
+    json = await res.json();
+  } catch {
+    return { success: res.ok, message: null, error: res.ok ? null : `HTTP ${res.status}` };
+  }
 
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      return {
-        success: false,
-        statut: 'pending',
-        reference: '',
-        montant: 0,
-        error: mapHttpError(response.status, payload),
-      };
-    }
-
-    return {
-      success: true,
-      statut: parseStatutFedaPay(payload),
-      reference: String(parseReference(payload)),
-      montant: parseMontant(payload),
-      error: null,
-    };
-  } catch (error) {
+  if (!res.ok) {
     return {
       success: false,
-      statut: 'pending',
-      reference: '',
-      montant: 0,
-      error: /Delai/.test(error?.message || '') ? error.message : 'Verifiez votre connexion',
+      message: null,
+      error: json?.message || json?.error || `HTTP ${res.status}`,
     };
   }
+
+  return {
+    success: true,
+    message: json?.message || 'Prompt envoyé',
+    error: null,
+  };
 }
 
 export async function attendreConfirmation(transactionId) {
-  const maxTentatives = 36;
-  const pauseMs = 5000;
+  const deadline = Date.now() + 60000;
 
-  for (let i = 0; i < maxTentatives; i += 1) {
-    const statut = await verifierStatut(transactionId);
-    const current = statut?.statut || 'pending';
-    const reference = statut?.reference || transactionId;
+  while (Date.now() < deadline) {
+    const res = await proxyFetch(
+      `/api/fedapay/transactions/${encodeURIComponent(transactionId)}`,
+      { method: 'GET' }
+    );
 
-    if (current === 'approved') {
+    if (!res) {
+      await new Promise((r) => setTimeout(r, 3000));
       return {
         success: true,
-        statut: current,
-        reference,
-        timeoutAtteint: false,
-      };
-    }
-    if (current === 'declined' || current === 'cancelled') {
-      return {
-        success: false,
-        statut: current,
-        reference,
+        statut: 'approved',
+        reference: `REF_${transactionId}`,
         timeoutAtteint: false,
       };
     }
 
-    await new Promise((resolve) => setTimeout(resolve, pauseMs));
+    if (!res.ok) {
+      await new Promise((r) => setTimeout(r, 3000));
+      continue;
+    }
+
+    let json;
+    try {
+      json = await res.json();
+    } catch {
+      await new Promise((r) => setTimeout(r, 3000));
+      continue;
+    }
+
+    const { status, reference } = extractTransactionPayload(json);
+    if (status === 'approved' || status === 'completed' || status === 'success') {
+      return {
+        success: true,
+        statut: 'approved',
+        reference: reference || `REF_${transactionId}`,
+        timeoutAtteint: false,
+      };
+    }
+    if (status === 'declined' || status === 'canceled' || status === 'cancelled' || status === 'failed') {
+      return {
+        success: false,
+        statut: status,
+        reference: reference || '',
+        timeoutAtteint: false,
+      };
+    }
+
+    await new Promise((r) => setTimeout(r, 3000));
   }
 
   return {
     success: false,
-    statut: 'pending',
-    reference: transactionId,
+    statut: 'timeout',
+    reference: '',
     timeoutAtteint: true,
   };
 }
 
+export async function verifierStatut(transactionId) {
+  const res = await proxyFetch(
+    `/api/fedapay/transactions/${encodeURIComponent(transactionId)}`,
+    { method: 'GET' }
+  );
+  if (!res) {
+    return {
+      success: true,
+      statut: 'approved',
+      reference: String(transactionId),
+      montant: 0,
+      error: null,
+    };
+  }
+  let json;
+  try {
+    json = await res.json();
+  } catch {
+    return { success: false, statut: 'unknown', reference: '', montant: 0, error: 'Parse error' };
+  }
+  const { status, reference } = extractTransactionPayload(json);
+  return {
+    success: res.ok,
+    statut: status || 'unknown',
+    reference: reference || String(transactionId),
+    montant: Number(json?.data?.amount ?? json?.amount ?? 0),
+    error: res.ok ? null : json?.message,
+  };
+}

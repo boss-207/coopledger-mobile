@@ -1,0 +1,1011 @@
+[
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_president",
+        "type": "address"
+      },
+      {
+        "internalType": "string",
+        "name": "_nomPresident",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "wallet",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "nom",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "enum CoopLedger.Role",
+        "name": "role",
+        "type": "uint8"
+      }
+    ],
+    "name": "MembreAjoute",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "wallet",
+        "type": "address"
+      }
+    ],
+    "name": "MembreRetire",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "ancienPresident",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "nouveauPresident",
+        "type": "address"
+      }
+    ],
+    "name": "PresidenceTransferee",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "wallet",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "enum CoopLedger.Role",
+        "name": "ancienRole",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "enum CoopLedger.Role",
+        "name": "nouveauRole",
+        "type": "uint8"
+      }
+    ],
+    "name": "RoleModifie",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "transactionId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "creePar",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "montant",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "voteDeclenche",
+        "type": "bool"
+      }
+    ],
+    "name": "TransactionEnregistree",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "transactionId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "voteId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "votant",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "choixOui",
+        "type": "bool"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "votesOui",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "votesNon",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "enum CoopLedger.StatutVote",
+        "name": "statutVote",
+        "type": "uint8"
+      }
+    ],
+    "name": "VoteEnregistre",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "transactionId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "voteId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "enum CoopLedger.StatutVote",
+        "name": "resultat",
+        "type": "uint8"
+      }
+    ],
+    "name": "VoteFinalise",
+    "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "DUREE_VOTE",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "QUORUM_PCT",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "SEUIL_VOTE",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "aVote",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "wallet",
+        "type": "address"
+      },
+      {
+        "internalType": "string",
+        "name": "nom",
+        "type": "string"
+      }
+    ],
+    "name": "addMember",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "string",
+        "name": "titre",
+        "type": "string"
+      },
+      {
+        "internalType": "uint256",
+        "name": "montant",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "categorie",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "typeTransaction",
+        "type": "string"
+      }
+    ],
+    "name": "enregistrerTransaction",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "transactionId",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "transactionId",
+        "type": "uint256"
+      }
+    ],
+    "name": "estExpire",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "wallet",
+        "type": "address"
+      }
+    ],
+    "name": "getMembre",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "address",
+            "name": "wallet",
+            "type": "address"
+          },
+          {
+            "internalType": "string",
+            "name": "nom",
+            "type": "string"
+          },
+          {
+            "internalType": "enum CoopLedger.Role",
+            "name": "role",
+            "type": "uint8"
+          },
+          {
+            "internalType": "bool",
+            "name": "actif",
+            "type": "bool"
+          }
+        ],
+        "internalType": "struct CoopLedger.Membre",
+        "name": "",
+        "type": "tuple"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "getMembres",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "address",
+            "name": "wallet",
+            "type": "address"
+          },
+          {
+            "internalType": "string",
+            "name": "nom",
+            "type": "string"
+          },
+          {
+            "internalType": "enum CoopLedger.Role",
+            "name": "role",
+            "type": "uint8"
+          },
+          {
+            "internalType": "bool",
+            "name": "actif",
+            "type": "bool"
+          }
+        ],
+        "internalType": "struct CoopLedger.Membre[]",
+        "name": "",
+        "type": "tuple[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "getSolde",
+    "outputs": [
+      {
+        "internalType": "int256",
+        "name": "solde",
+        "type": "int256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "getTousVotes",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "uint256",
+            "name": "transactionId",
+            "type": "uint256"
+          },
+          {
+            "internalType": "string",
+            "name": "titre",
+            "type": "string"
+          },
+          {
+            "internalType": "uint256",
+            "name": "montant",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "votesOui",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "votesNon",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "openedAt",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "expiresAt",
+            "type": "uint256"
+          },
+          {
+            "internalType": "enum CoopLedger.StatutVote",
+            "name": "statut",
+            "type": "uint8"
+          },
+          {
+            "internalType": "uint256",
+            "name": "totalMembresAuMomentDuVote",
+            "type": "uint256"
+          }
+        ],
+        "internalType": "struct CoopLedger.VoteSession[]",
+        "name": "",
+        "type": "tuple[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "getToutesTransactions",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "uint256",
+            "name": "id",
+            "type": "uint256"
+          },
+          {
+            "internalType": "string",
+            "name": "titre",
+            "type": "string"
+          },
+          {
+            "internalType": "uint256",
+            "name": "montant",
+            "type": "uint256"
+          },
+          {
+            "internalType": "string",
+            "name": "categorie",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "typeTransaction",
+            "type": "string"
+          },
+          {
+            "internalType": "address",
+            "name": "creePar",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "timestamp",
+            "type": "uint256"
+          },
+          {
+            "internalType": "enum CoopLedger.StatutTransaction",
+            "name": "statut",
+            "type": "uint8"
+          },
+          {
+            "internalType": "bool",
+            "name": "voteDeclenche",
+            "type": "bool"
+          }
+        ],
+        "internalType": "struct CoopLedger.Transaction[]",
+        "name": "",
+        "type": "tuple[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      }
+    ],
+    "name": "getTransaction",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "uint256",
+            "name": "id",
+            "type": "uint256"
+          },
+          {
+            "internalType": "string",
+            "name": "titre",
+            "type": "string"
+          },
+          {
+            "internalType": "uint256",
+            "name": "montant",
+            "type": "uint256"
+          },
+          {
+            "internalType": "string",
+            "name": "categorie",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "typeTransaction",
+            "type": "string"
+          },
+          {
+            "internalType": "address",
+            "name": "creePar",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "timestamp",
+            "type": "uint256"
+          },
+          {
+            "internalType": "enum CoopLedger.StatutTransaction",
+            "name": "statut",
+            "type": "uint8"
+          },
+          {
+            "internalType": "bool",
+            "name": "voteDeclenche",
+            "type": "bool"
+          }
+        ],
+        "internalType": "struct CoopLedger.Transaction",
+        "name": "",
+        "type": "tuple"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "transactionId",
+        "type": "uint256"
+      }
+    ],
+    "name": "getVote",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "uint256",
+            "name": "transactionId",
+            "type": "uint256"
+          },
+          {
+            "internalType": "string",
+            "name": "titre",
+            "type": "string"
+          },
+          {
+            "internalType": "uint256",
+            "name": "montant",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "votesOui",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "votesNon",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "openedAt",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "expiresAt",
+            "type": "uint256"
+          },
+          {
+            "internalType": "enum CoopLedger.StatutVote",
+            "name": "statut",
+            "type": "uint8"
+          },
+          {
+            "internalType": "uint256",
+            "name": "totalMembresAuMomentDuVote",
+            "type": "uint256"
+          }
+        ],
+        "internalType": "struct CoopLedger.VoteSession",
+        "name": "",
+        "type": "tuple"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "transactionId",
+        "type": "uint256"
+      }
+    ],
+    "name": "getVoteId",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "listeAdresses",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "membres",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "wallet",
+        "type": "address"
+      },
+      {
+        "internalType": "string",
+        "name": "nom",
+        "type": "string"
+      },
+      {
+        "internalType": "enum CoopLedger.Role",
+        "name": "role",
+        "type": "uint8"
+      },
+      {
+        "internalType": "bool",
+        "name": "actif",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "nombreMembresActifs",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "nombreTransactions",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "nombreVotes",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "president",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "wallet",
+        "type": "address"
+      }
+    ],
+    "name": "removeMember",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "wallet",
+        "type": "address"
+      },
+      {
+        "internalType": "enum CoopLedger.Role",
+        "name": "nouveauRole",
+        "type": "uint8"
+      }
+    ],
+    "name": "setRole",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "transactions",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "titre",
+        "type": "string"
+      },
+      {
+        "internalType": "uint256",
+        "name": "montant",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "categorie",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "typeTransaction",
+        "type": "string"
+      },
+      {
+        "internalType": "address",
+        "name": "creePar",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "timestamp",
+        "type": "uint256"
+      },
+      {
+        "internalType": "enum CoopLedger.StatutTransaction",
+        "name": "statut",
+        "type": "uint8"
+      },
+      {
+        "internalType": "bool",
+        "name": "voteDeclenche",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "nouveauPresident",
+        "type": "address"
+      }
+    ],
+    "name": "transferPresidence",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "voteParTransaction",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "transactionId",
+        "type": "uint256"
+      }
+    ],
+    "name": "voterNon",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "transactionId",
+        "type": "uint256"
+      }
+    ],
+    "name": "voterOui",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "votes",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "transactionId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "titre",
+        "type": "string"
+      },
+      {
+        "internalType": "uint256",
+        "name": "montant",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "votesOui",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "votesNon",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "openedAt",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "expiresAt",
+        "type": "uint256"
+      },
+      {
+        "internalType": "enum CoopLedger.StatutVote",
+        "name": "statut",
+        "type": "uint8"
+      },
+      {
+        "internalType": "uint256",
+        "name": "totalMembresAuMomentDuVote",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  }
+]

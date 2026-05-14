@@ -6,11 +6,24 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useVotes, useVoter } from '../hooks/useBlockchain';
 import { polygonscanTxUrl } from '../config/blockchain';
-import { addDoc, collection, doc, onSnapshot, query, runTransaction, setDoc, where, serverTimestamp, updateDoc } from 'firebase/firestore';
+import {
+  addDoc,
+  collection,
+  doc,
+  getDocs,
+  onSnapshot,
+  query,
+  runTransaction,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  where,
+} from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { updateRolesAfterVote } from '../utils/updateRoles';
 import { quorumAtteint } from '../utils/getMembresActifs';
 import { calculerSolde, formaterMontant } from '../utils/soldeUtils';
+import { envoyerNotifPush } from '../services/pushService';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
@@ -31,10 +44,15 @@ function ParticipationQuorumBloc({
   totalMembres,
   quorumPct,
   accentColor,
+  /** Si défini, base pour le quorum et les libellés (ex. membres hors initiateur) */
+  quorumBaseMembres,
 }) {
+  const base = quorumBaseMembres != null && quorumBaseMembres > 0
+    ? quorumBaseMembres
+    : Math.max(1, Number(totalMembres || 0));
   const totalVotes = votesOui + votesNon;
-  const pctBar = totalMembres > 0 ? Math.min(100, Math.round((totalVotes / totalMembres) * 100)) : 0;
-  const qInfo = quorumAtteint(votesOui, totalMembres, quorumPct);
+  const pctBar = base > 0 ? Math.min(100, Math.round((totalVotes / base) * 100)) : 0;
+  const qInfo = quorumAtteint(votesOui, base, quorumPct);
   const manqueOui = Math.max(0, qInfo.votesNecessaires - qInfo.votesActuels);
 
   return (
@@ -44,12 +62,14 @@ function ParticipationQuorumBloc({
         <View style={[styles.participBarFill, { width: `${pctBar}%`, backgroundColor: accentColor }]} />
       </View>
       <Text style={styles.participLine}>
-        {totalVotes} vote{totalVotes > 1 ? 's' : ''} enregistré{totalVotes > 1 ? 's' : ''} sur {totalMembres} membre
-        {totalMembres > 1 ? 's' : ''} (base quorum {quorumPct} %)
+        {totalVotes} vote{totalVotes > 1 ? 's' : ''} enregistré{totalVotes > 1 ? 's' : ''} sur {base} membre
+        {base > 1 ? 's' : ''}
+        {quorumBaseMembres != null ? ' (hors initiateur)' : ''} (base quorum {quorumPct} %)
       </Text>
       <Text style={styles.quorumLine}>
-        Quorum : {qInfo.votesNecessaires} vote{qInfo.votesNecessaires > 1 ? 's' : ''} OUI requis sur {totalMembres} membre
-        {totalMembres > 1 ? 's' : ''} ({quorumPct} %)
+        Quorum : {qInfo.votesNecessaires} vote{qInfo.votesNecessaires > 1 ? 's' : ''} OUI requis sur {base} membre
+        {base > 1 ? 's' : ''}
+        {quorumBaseMembres != null ? ' (hors initiateur)' : ''} ({quorumPct} %)
       </Text>
       <Text style={styles.voteDetailLine}>
         Votes OUI : {votesOui}  ✅{'\n'}
@@ -159,10 +179,69 @@ export default function VoteScreen({ userData }) {
       );
       return;
     }
+    const voteCourant = votes.find((v) => v.transactionId === transactionId);
+    const w = userData?.walletAddress ? String(userData.walletAddress).toLowerCase() : '';
+    const c = voteCourant?.creePar ? String(voteCourant.creePar).toLowerCase() : '';
+    if (w && c && w === c) {
+      Alert.alert('Information', 'Vous avez initié ce vote : vous ne pouvez pas voter.');
+      return;
+    }
     setVotingId(transactionId);
     try {
       const result = await voter(transactionId, choix);
       await enregistrerVoteLocal(transactionId, choix);
+
+      const coopId = userData?.cooperativeId || 'broukou';
+      try {
+        const membresSnap = await getDocs(
+          query(
+            collection(db, 'users'),
+            where('cooperativeId', '==', coopId),
+            where('statut', '==', 'actif')
+          )
+        );
+        const tokens = membresSnap.docs
+          .map((d) => d.data().expoPushToken)
+          .filter(Boolean);
+
+        const voteId = transactionId;
+
+        const tmFin = Number(voteCourant?.totalMembres || 0);
+        const quorumBaseFin = voteCourant?.creePar
+          ? Math.max(1, tmFin - 1)
+          : Math.max(1, tmFin);
+        const quorumRequis = Math.ceil(
+          quorumBaseFin * (Number(voteCourant?.quorumRequis || 60) / 100)
+        );
+        const nouveauOui =
+          result.votesOui != null
+            ? Number(result.votesOui)
+            : Number(voteCourant?.votesOui || 0) + (choix === 'oui' ? 1 : 0);
+        const quorumAtteint = nouveauOui >= quorumRequis;
+
+        if (
+          (result.voteTermine && result.resultat === 'approuve')
+          || (choix === 'oui' && quorumAtteint)
+        ) {
+          await envoyerNotifPush({
+            tokens,
+            titre: '✅ Vote approuvé !',
+            message:
+              `"${voteCourant?.titre || 'Proposition'}" a été approuvé.\n`
+              + 'Le trésorier peut procéder au paiement.',
+            data: { type: 'VOTE_APPROUVE', voteId },
+          });
+        } else if (!result.voteTermine) {
+          await envoyerNotifPush({
+            tokens,
+            titre: '🗳️ Nouveau vote enregistré',
+            message: `Votez pour : "${voteCourant?.titre || 'cette proposition'}"`,
+            data: { type: 'NEW_VOTE', voteId },
+          });
+        }
+      } catch (err) {
+        console.log('Notif error:', err);
+      }
 
       if (result.voteTermine) {
         const msg = result.resultat === 'approuve'
@@ -209,6 +288,12 @@ export default function VoteScreen({ userData }) {
     }
     if (vote.type === 'transfert_tresorier' && uid === vote.ancienRoleUid) {
       return { ok: false, reason: 'Vous ne pouvez pas voter sur votre propre transfert de rôle.' };
+    }
+
+    const initiateurUid =
+      vote.creeParUid || vote.createurUid || vote.createdByUid || vote.creePar || vote.uidCreateur;
+    if (initiateurUid && uid === initiateurUid) {
+      return { ok: false, reason: '👤 Vous avez initié ce vote — vous ne pouvez pas voter.' };
     }
 
     return { ok: true };
@@ -384,6 +469,8 @@ export default function VoteScreen({ userData }) {
           const isVoting = govVotingId === v.id;
           const totalVotes = Number(v.votesOui || 0) + Number(v.votesNon || 0);
           const totalMembres = Number(v.totalMembres || 0);
+          const initiateurGov = v.creeParUid || v.createurUid || v.createdByUid;
+          const quorumBaseGov = initiateurGov ? Math.max(1, totalMembres - 1) : Math.max(1, totalMembres);
           const pctOui = totalMembres > 0 ? Math.round((Number(v.votesOui || 0) / totalMembres) * 100) : 0;
           const pctNon = totalMembres > 0 ? Math.round((Number(v.votesNon || 0) / totalMembres) * 100) : 0;
           const checkVote = canVoteOnGovernance(v);
@@ -429,6 +516,7 @@ export default function VoteScreen({ userData }) {
                 votesOui={Number(v.votesOui || 0)}
                 votesNon={Number(v.votesNon || 0)}
                 totalMembres={totalMembres}
+                quorumBaseMembres={quorumBaseGov}
                 quorumPct={Number(v.quorumRequis || 60)}
                 accentColor={accent}
               />
@@ -500,6 +588,12 @@ export default function VoteScreen({ userData }) {
           const pctNon = total > 0 ? Math.round(vote.votesNon / total * 100) : 0;
           const isVoting = votingId === vote.transactionId;
 
+          const walletUser = userData?.walletAddress ? String(userData.walletAddress).toLowerCase() : '';
+          const creeParVote = vote.creePar ? String(vote.creePar).toLowerCase() : '';
+          const estInitiateurFin = !!(walletUser && creeParVote && walletUser === creeParVote);
+          const tmFin = Number(vote.totalMembres || 0);
+          const quorumBaseFin = vote.creePar ? Math.max(1, tmFin - 1) : Math.max(1, tmFin);
+
           return (
             <View key={vote.transactionId} style={styles.voteCard}>
               <View style={styles.voteHeader}>
@@ -518,6 +612,7 @@ export default function VoteScreen({ userData }) {
                 votesOui={vote.votesOui}
                 votesNon={vote.votesNon}
                 totalMembres={vote.totalMembres}
+                quorumBaseMembres={quorumBaseFin}
                 quorumPct={vote.quorumRequis}
                 accentColor={GREEN}
               />
@@ -545,6 +640,12 @@ export default function VoteScreen({ userData }) {
                 <View style={styles.dejaVoteBox}>
                   <Text style={styles.dejaVoteText}>
                     ✅ Tu as voté {dejaVote.toUpperCase()} — signé cryptographiquement sur Polygon
+                  </Text>
+                </View>
+              ) : estInitiateurFin ? (
+                <View style={styles.dejaVoteBox}>
+                  <Text style={styles.dejaVoteText}>
+                    👤 Vous avez initié ce vote — vous ne participez pas au scrutin.
                   </Text>
                 </View>
               ) : (

@@ -5,14 +5,32 @@ import {
 } from 'react-native';
 import { useVotes } from '../hooks/useBlockchain';
 import { polygonscanTxUrl, formatFCFA } from '../config/blockchain';
-import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { collection, limit, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../config/firebase';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
+
+/** Même règle que le registre : exclut rejeté / annulé ; inclut valide, en_cours, sans statut. */
+function transactionCompteePourSoldes(t) {
+  const s = t?.statut;
+  if (s === 'rejete' || s === 'rejeté' || s === 'annule' || s === 'annulé') return false;
+  return true;
+}
+
 function formatDate(d) {
   if (!d) return '';
   return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+}
+
+function transactionDateMs(t) {
+  const d = t?.date;
+  if (d instanceof Date && !Number.isNaN(d.getTime())) return d.getTime();
+  if (d && typeof d.toDate === 'function') {
+    const x = d.toDate();
+    return Number.isNaN(x.getTime()) ? 0 : x.getTime();
+  }
+  return 0;
 }
 
 export default function DashboardScreen({ userData, navigation }) {
@@ -38,18 +56,18 @@ export default function DashboardScreen({ userData, navigation }) {
     const qTx = query(
       collection(db, 'transactions'),
       where('cooperativeId', '==', coopId),
-      orderBy('date', 'desc'),
-      limit(50)
+      limit(300)
     );
     const unsubTx = onSnapshot(qTx, (snap) => {
       const data = snap.docs.map((d) => ({
         id: d.id,
         ...d.data(),
-        date: d.data().date?.toDate?.() || new Date(d.data().date),
+        date: d.data().date?.toDate?.() || new Date(d.data().date || Date.now()),
       }));
+      data.sort((a, b) => transactionDateMs(b) - transactionDateMs(a));
       setTransactions(data);
 
-      const validTx = data.filter((t) => t.statut === 'valide');
+      const validTx = data.filter(transactionCompteePourSoldes);
       const entrees = ['cotisation', 'mobile_money', 'main_a_main', 'vente_recolte', 'subvention', 'remboursement'];
       const sorties = ['depense'];
 
@@ -87,15 +105,25 @@ export default function DashboardScreen({ userData, navigation }) {
   useEffect(() => {
     const q = query(
       collection(db, 'appels_fonds'),
-      where('statut', '==', 'actif'),
       where('cooperativeId', '==', coopId),
-      orderBy('dateCreation', 'desc')
+      where('statut', '==', 'actif')
     );
-    const unsub = onSnapshot(q, (snap) => {
-      setAppelsActifs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    }, () => {
-      setAppelsActifs([]);
-    });
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        data.sort((a, b) => {
+          const ta = a?.dateCreation?.toDate ? a.dateCreation.toDate().getTime() : 0;
+          const tb = b?.dateCreation?.toDate ? b.dateCreation.toDate().getTime() : 0;
+          return tb - ta;
+        });
+        setAppelsActifs(data || []);
+      },
+      (err) => {
+        console.error('appels_fonds error:', err);
+        setAppelsActifs([]);
+      }
+    );
     return () => unsub();
   }, [coopId]);
 
@@ -153,7 +181,7 @@ export default function DashboardScreen({ userData, navigation }) {
             <Text style={styles.quickLinkText}>📄 Rapport mensuel</Text>
           </TouchableOpacity>
           {userData?.role === 'president' ? (
-            <TouchableOpacity onPress={() => navigation.navigate('Profil', { screen: 'MembresGestion' })}>
+            <TouchableOpacity onPress={() => navigation.navigate('Membres')}>
               <Text style={styles.quickLinkText}>👥 Membres</Text>
             </TouchableOpacity>
           ) : null}
@@ -175,7 +203,7 @@ export default function DashboardScreen({ userData, navigation }) {
       {userData?.role === 'president' && nbDemandes > 0 ? (
         <TouchableOpacity
           style={styles.demandesBanner}
-          onPress={() => navigation.navigate('Profil', { screen: 'MembresGestion' })}
+          onPress={() => navigation.navigate('Membres')}
         >
           <Text style={{ fontSize: 20 }}>👤</Text>
           <View style={{ flex: 1, marginLeft: 10 }}>

@@ -4,14 +4,27 @@ import {
   ActivityIndicator, TextInput, Linking, Modal, Image, Pressable,
   ScrollView,
 } from 'react-native';
-import { collection, onSnapshot } from 'firebase/firestore';
-import { useTransactions, useSolde } from '../hooks/useBlockchain';
+import {
+  collection,
+  onSnapshot,
+  query,
+  where,
+  orderBy,
+  limit,
+} from 'firebase/firestore';
 import { polygonscanTxUrl } from '../config/blockchain';
 import { db } from '../config/firebase';
 import { getBadgeType, TYPES_TRANSACTION } from '../utils/transactionTypes';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
+
+/** Tx prises en compte pour solde / revenus / dépenses (exclut rejeté, annulé). */
+function transactionCompteePourSoldes(t) {
+  const s = t?.statut;
+  if (s === 'rejete' || s === 'rejeté' || s === 'annule' || s === 'annulé') return false;
+  return true;
+}
 
 function formatDateShort(d) {
   if (!d) return '';
@@ -36,7 +49,7 @@ function toJsDate(uploadedAt) {
   return new Date(uploadedAt);
 }
 
-/** Type métier Firestore ; repli sur l’ancien champ chaîne Polygon si absent. */
+/** Type métier Firestore */
 function resolveTypeTransaction(tx, meta) {
   const brut = meta?.typeTransaction;
   if (brut && TYPES_TRANSACTION[brut]) return brut;
@@ -45,14 +58,25 @@ function resolveTypeTransaction(tx, meta) {
   return 'cotisation';
 }
 
-export default function HistoriqueScreen() {
-  const { transactions, loading, refetch } = useTransactions();
-  const { solde } = useSolde();
+function metaFromTx(tx) {
+  return {
+    typeTransaction: tx.typeTransaction,
+    justificatif: tx.justificatif,
+    referencePayment: tx.referencePayment,
+  };
+}
+
+export default function HistoriqueScreen({ userData }) {
+  const coopId = userData?.cooperativeId || 'broukou';
+  const [transactions, setTransactions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [solde, setSolde] = useState(0);
+  const [revenus, setRevenus] = useState(0);
+  const [depenses, setDepenses] = useState(0);
   const [filtered, setFiltered] = useState([]);
   const [search, setSearch] = useState('');
   const [activeFilter, setActiveFilter] = useState('tout');
   const [activeTypeFilter, setActiveTypeFilter] = useState('tous');
-  const [metaByChainId, setMetaByChainId] = useState({});
   const [receiptModal, setReceiptModal] = useState({
     visible: false, url: null, nom: '', dateLabel: '',
   });
@@ -77,45 +101,64 @@ export default function HistoriqueScreen() {
   ];
 
   useEffect(() => {
-    const unsub = onSnapshot(
+    const q = query(
       collection(db, 'transactions'),
+      where('cooperativeId', '==', coopId),
+      orderBy('date', 'desc'),
+      limit(100)
+    );
+    const unsub = onSnapshot(
+      q,
       (snap) => {
-        const next = {};
-        snap.forEach((docSnap) => {
-          const id = docSnap.id;
-          if (id.startsWith('chain_')) {
-            const num = Number(id.replace(/^chain_/, ''));
-            if (!Number.isNaN(num)) next[num] = docSnap.data();
-          }
-        });
-        setMetaByChainId(next);
+        const data = snap.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+          date: d.data().date?.toDate?.() || new Date(d.data().date || Date.now()),
+        }));
+        setTransactions(data);
+
+        const valides = data.filter(transactionCompteePourSoldes);
+        const entrees = ['cotisation', 'mobile_money', 'main_a_main', 'vente_recolte', 'subvention', 'remboursement'];
+        const rev = valides
+          .filter((t) =>
+            entrees.includes(t.typeTransaction)
+            || t.type === 'entree'
+            || t.type === 'revenu')
+          .reduce((a, t) => a + (t.montant || 0), 0);
+        const dep = valides
+          .filter((t) =>
+            t.typeTransaction === 'depense'
+            || t.type === 'sortie'
+            || t.type === 'depense')
+          .reduce((a, t) => a + (t.montant || 0), 0);
+
+        setRevenus(rev);
+        setDepenses(dep);
+        setSolde(rev - dep);
+        setLoading(false);
       },
       () => {
-        // Erreur Firestore (règles / réseau) : on garde la liste chaîne sans métadonnées
-        setMetaByChainId({});
+        setTransactions([]);
+        setRevenus(0);
+        setDepenses(0);
+        setSolde(0);
+        setLoading(false);
       }
     );
     return () => unsub();
-  }, []);
+  }, [coopId]);
 
   useEffect(() => {
     let data = [...transactions];
-    if (activeFilter === 'revenu') data = data.filter(t => t.type === 'revenu' || t.type === 'entree');
-    else if (activeFilter === 'depense') data = data.filter(t => t.type === 'depense' || t.type === 'sortie');
-    else if (activeFilter === 'en_cours') data = data.filter(t => t.statut === 'en_cours');
+    if (activeFilter === 'revenu') data = data.filter((t) => t.type === 'revenu' || t.type === 'entree');
+    else if (activeFilter === 'depense') data = data.filter((t) => t.type === 'depense' || t.type === 'sortie');
+    else if (activeFilter === 'en_cours') data = data.filter((t) => t.statut === 'en_cours');
     if (activeTypeFilter !== 'tous') {
-      data = data.filter((t) => {
-        const meta = metaByChainId[t.id];
-        return resolveTypeTransaction(t, meta) === activeTypeFilter;
-      });
+      data = data.filter((t) => resolveTypeTransaction(t, metaFromTx(t)) === activeTypeFilter);
     }
-    if (search.trim()) data = data.filter(t => t.titre?.toLowerCase().includes(search.toLowerCase()));
+    if (search.trim()) data = data.filter((t) => t.titre?.toLowerCase().includes(search.toLowerCase()));
     setFiltered(data);
-  }, [activeFilter, activeTypeFilter, search, transactions, metaByChainId]);
-
-  const revenus = transactions
-    .filter(t => t.statut === 'valide' && (t.type === 'entree' || t.type === 'revenu'))
-    .reduce((a, t) => a + Number(t.montant || 0), 0);
+  }, [activeFilter, activeTypeFilter, search, transactions]);
 
   function openReceipt(justificatif) {
     const d = toJsDate(justificatif.uploadedAt);
@@ -131,16 +174,17 @@ export default function HistoriqueScreen() {
     setReceiptModal((s) => ({ ...s, visible: false }));
   }
 
-  if (loading) return (
-    <View style={styles.centered}>
-      <ActivityIndicator size="large" color={GREEN} />
-      <Text style={{ marginTop: 12, color: '#6b7280' }}>Chargement depuis Polygon...</Text>
-    </View>
-  );
+  if (loading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color={GREEN} />
+        <Text style={{ marginTop: 12, color: '#6b7280' }}>Chargement depuis Firebase...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
-      {/* STATS */}
       <View style={styles.statsBox}>
         <View style={styles.statItem}>
           <Text style={styles.statLabel}>Solde Total</Text>
@@ -162,7 +206,6 @@ export default function HistoriqueScreen() {
         </View>
       </View>
 
-      {/* RECHERCHE */}
       <View style={styles.searchBox}>
         <Text style={{ fontSize: 16, marginRight: 8 }}>🔍</Text>
         <TextInput
@@ -179,7 +222,6 @@ export default function HistoriqueScreen() {
         )}
       </View>
 
-      {/* Filtres par type de transaction (Firestore) */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -206,9 +248,8 @@ export default function HistoriqueScreen() {
         ))}
       </ScrollView>
 
-      {/* FILTRES */}
       <View style={styles.filtersRow}>
-        {filters.map(f => (
+        {filters.map((f) => (
           <TouchableOpacity
             key={f.key}
             style={[styles.filterBtn, activeFilter === f.key && styles.filterBtnActive]}
@@ -221,7 +262,6 @@ export default function HistoriqueScreen() {
         ))}
       </View>
 
-      {/* LISTE */}
       {filtered.length === 0 ? (
         <View style={styles.emptyBox}>
           <Text style={{ fontSize: 48, marginBottom: 12 }}>📭</Text>
@@ -230,11 +270,11 @@ export default function HistoriqueScreen() {
       ) : (
         <FlatList
           data={filtered}
-          keyExtractor={(item, index) => `${item.id}-${index}`}
+          keyExtractor={(item) => item.id}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 100 }}
           renderItem={({ item: tx }) => {
-            const meta = metaByChainId[tx.id];
+            const meta = metaFromTx(tx);
             const typeCle = resolveTypeTransaction(tx, meta);
             const badge = getBadgeType(typeCle);
             const statutColors = { valide: GREEN, en_cours: '#d97706', rejete: '#dc2626', annule: '#6b7280' };
@@ -455,48 +495,6 @@ const styles = StyleSheet.create({
   filterTextActive: { color: '#fff' },
   emptyBox: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
   emptyText: { fontSize: 16, fontWeight: '600', color: '#6b7280' },
-  txCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16, padding: 0, marginBottom: 10,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, elevation: 2,
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  typeBadge: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-    zIndex: 2,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    borderWidth: 1,
-    maxWidth: '62%',
-  },
-  typeBadgeText: { fontSize: 11, fontWeight: '900' },
-  txRowPress: {
-    flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14,
-    paddingTop: 40,
-  },
-  txIcon: { width: 44, height: 44, borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
-  txTitle: { fontSize: 14, fontWeight: '700', color: '#111827' },
-  txDate: { fontSize: 11, color: '#9ca3af', marginTop: 2 },
-  txHash: { fontSize: 11, color: GREEN, fontFamily: 'monospace', marginTop: 2 },
-  txHashLink: { color: '#2563eb', fontStyle: 'italic' },
-  amountRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  attachIconBtn: { padding: 2 },
-  attachIcon: { fontSize: 18 },
-  refPayment: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#2563eb',
-    marginTop: 4,
-    maxWidth: 180,
-    textAlign: 'right',
-  },
-  txAmount: { fontSize: 16, fontWeight: '800' },
-  txStatut: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, marginTop: 4 },
-  txStatutText: { fontSize: 11, fontWeight: '600' },
   receiptBadge: {
     borderTopWidth: 1, borderTopColor: '#e5e7eb', paddingVertical: 12, paddingHorizontal: 14,
     backgroundColor: '#f0fdf4',
