@@ -19,6 +19,7 @@ import { selectImage, uploadJustificatif } from '../utils/uploadImage';
 import { getNombreMembres, getMembresActifs } from '../utils/getMembresActifs';
 import { calculerSolde, verifierSolde, formaterMontant } from '../utils/soldeUtils';
 import { envoyerNotifPush } from '../services/pushService';
+import { peutCreerTransaction, roleCanonique } from '../utils/roles';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
@@ -30,28 +31,8 @@ const OPERATEURS_DEPENSE = [
 
 const CATEGORIES = ['Achat intrants', 'Équipement', 'Formation', 'Transport', 'Cotisations', 'Autre'];
 
-// Normalise un rôle pour comparaison : minuscules, sans accents, sans espaces, sans ponctuation
-function normaliserRole(role) {
-  if (!role) return '';
-  return String(role)
-    .trim()
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // enlève les accents
-    .replace(/[^a-z]/g, ''); // enlève tout sauf a-z
-}
-
-// Tous les rôles autorisés à créer des transactions
-const ROLES_AUTORISES_NORMALISES = ['president', 'tresorier'];
-
-function peutCreer(userData) {
-  if (!userData) return false;
-  const role = normaliserRole(userData.role);
-  console.log('[NouvelleTransaction] role normalisé:', role, '| brut:', userData.role);
-  return ROLES_AUTORISES_NORMALISES.includes(role);
-}
-
-export default function NouvelleTransactionScreen({ userData, navigation }) {
+export default function NouvelleTransactionScreen({ userData, navigation, route }) {
+  const profile = userData ?? route?.params?.userData ?? null;
   const [form, setForm] = useState({
     titre: '',
     montant: '',
@@ -86,25 +67,25 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
   const busy = loading || uploadingJustificatif;
   const depasseSolde = form.type === 'sortie' && !soldeLoading && montantNum > soldeDisponible;
 
-  const peutCreerTransactions = peutCreer(userData);
+  const peutCreerTransactions = peutCreerTransaction(profile);
+  const roleManquant = Boolean(profile?.uid) && !profile?.role;
 
   useEffect(() => {
-    console.log(
-      '[NouvelleTransaction] userData reçu:',
-      JSON.stringify({
-        uid: userData?.uid,
-        role: userData?.role,
-        peutCreer: peutCreerTransactions,
-      })
-    );
-  }, [userData?.uid, userData?.role, peutCreerTransactions]);
+    if (!__DEV__) return;
+    console.log('[NouvelleTransaction]', {
+      uid: profile?.uid,
+      roleBrut: profile?.role,
+      roleCanonique: roleCanonique(profile?.role),
+      peutCreer: peutCreerTransactions,
+    });
+  }, [profile?.uid, profile?.role, peutCreerTransactions]);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         setSoldeLoading(true);
-        const coopId = userData?.cooperativeId || 'broukou';
+        const coopId = profile?.cooperativeId || 'broukou';
         const solde = await calculerSolde(coopId);
         if (alive) setSoldeDisponible(solde);
       } catch {
@@ -114,11 +95,11 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
       }
     })();
     return () => { alive = false; };
-  }, [userData?.cooperativeId]);
+  }, [profile?.cooperativeId]);
 
   useEffect(() => {
     let alive = true;
-    const coopId = userData?.cooperativeId || 'broukou';
+    const coopId = profile?.cooperativeId || 'broukou';
     if (form.type !== 'entree') return undefined;
     (async () => {
       try {
@@ -129,7 +110,7 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
       }
     })();
     return () => { alive = false; };
-  }, [form.type, userData?.cooperativeId]);
+  }, [form.type, profile?.cooperativeId]);
 
   async function ajouterJustificatif() {
     try {
@@ -147,7 +128,7 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
   }
 
   async function soumettre() {
-    if (userData == null) {
+    if (profile == null) {
       Alert.alert('Chargement', 'Ton profil est encore en cours de chargement. Réessaie dans un instant.');
       return;
     }
@@ -160,7 +141,7 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
     }
     if (!form.titre.trim()) return Alert.alert('Erreur', 'Entre le titre de la transaction.');
     if (!form.montant || montantNum <= 0) return Alert.alert('Erreur', 'Entre un montant valide.');
-    if (justificatifUri && !userData?.uid) {
+    if (justificatifUri && !profile?.uid) {
       return Alert.alert('Connexion requise', 'Connecte-toi pour joindre un justificatif (identifiant membre).');
     }
 
@@ -205,7 +186,7 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
     }
 
     try {
-      const coopId = userData?.cooperativeId || 'broukou';
+      const coopId = profile?.cooperativeId || 'broukou';
 
       if (form.type === 'sortie') {
         const result = await verifierSolde(montantNum, coopId);
@@ -255,8 +236,8 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
         type: form.type,
         statut: 'valide',
         date: Timestamp.fromDate(new Date()),
-        creePar: userData?.uid || null,
-        createurNom: userData?.nom || null,
+        creePar: profile?.uid || null,
+        createurNom: profile?.nom || null,
         categorie: form.categorie || 'Autre',
         chainTransactionId: transactionId,
         polygonTxHash: hash,
@@ -287,11 +268,11 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
 
       let justificatifOk = false;
 
-      if (justificatifUri && userData && transactionId !== null && transactionId !== undefined) {
+      if (justificatifUri && profile && transactionId !== null && transactionId !== undefined) {
         setUploadingJustificatif(true);
         setUploadProgress(0);
         try {
-          const payload = await uploadJustificatif(transactionId, userData, {
+          const payload = await uploadJustificatif(transactionId, profile, {
             existingUri: justificatifUri,
             onProgress: (pct) => setUploadProgress(pct),
           });
@@ -421,7 +402,7 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
     }
   }
 
-  if (userData == null) {
+  if (profile == null || roleManquant) {
     return (
       <View
         style={{
@@ -442,7 +423,9 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
             textAlign: 'center',
           }}
         >
-          Chargement du profil…
+          {roleManquant
+            ? 'Profil incomplet (rôle manquant). Contactez le président.'
+            : 'Chargement du profil…'}
         </Text>
       </View>
     );
@@ -481,6 +464,11 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
         >
           Seuls le trésorier et le président peuvent créer des transactions.
         </Text>
+        {__DEV__ ? (
+          <Text style={{ fontSize: 12, color: '#9ca3af', marginTop: 12, textAlign: 'center' }}>
+            Rôle Firestore : {String(profile.role)} → {roleCanonique(profile.role) || '(inconnu)'}
+          </Text>
+        ) : null}
       </View>
     );
   }
@@ -491,7 +479,7 @@ export default function NouvelleTransactionScreen({ userData, navigation }) {
         {peutCreerTransactions && (
           <TouchableOpacity
             style={styles.appelBtn}
-            onPress={() => navigation.navigate('AppelDeFonds', { userData })}
+            onPress={() => navigation.navigate('AppelDeFonds', { userData: profile })}
           >
             <Text style={styles.appelBtnText}>💰 Appel de fonds</Text>
           </TouchableOpacity>

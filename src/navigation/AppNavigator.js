@@ -16,6 +16,7 @@ import MobileMoneyScreen from '../screens/MobileMoneyScreen';
 import MainAMainScreen from '../screens/MainAMainScreen';
 import RapportScreen from '../screens/RapportScreen';
 import MembresScreen from '../screens/MembresScreen';
+import { estMembreOuInstitution } from '../utils/roles';
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
@@ -54,17 +55,10 @@ function VideOngletNouvelleTx() {
 
 function BoutonOngletNouvelleTransaction({ userData, ...props }) {
   const navigation = useNavigation();
-  const roleNorm = userData?.role
-    ? String(userData.role)
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z]/g, '')
-    : null;
 
-  // Cache le bouton UNIQUEMENT pour membre et institution,
-  // et quand userData est encore en chargement (null) on affiche quand même
-  const doitCacher = roleNorm === 'membre' || roleNorm === 'institution';
+  // Cache le bouton UNIQUEMENT pour membre et institution ;
+  // pendant le chargement (userData null) on affiche quand même le bouton
+  const doitCacher = userData ? estMembreOuInstitution(userData) : false;
   if (doitCacher) {
     return <View style={[{ flex: 1 }, props.style]} />;
   }
@@ -127,7 +121,13 @@ function DashboardStack({ userData }) {
           headerTitleStyle: { fontWeight: '800', fontSize: 16 },
         }}
       >
-        {props => <NouvelleTransactionScreen {...props} userData={userData} />}
+        {({ navigation, route }) => (
+          <NouvelleTransactionScreen
+            navigation={navigation}
+            route={route}
+            userData={userData}
+          />
+        )}
       </Stack.Screen>
       <Stack.Screen
         name="MainAMain"

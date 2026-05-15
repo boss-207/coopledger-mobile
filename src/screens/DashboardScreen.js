@@ -8,6 +8,7 @@ import { polygonscanTxUrl, formatFCFA } from '../config/blockchain';
 import { collection, limit, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { calculerFinances, estEntree } from '../utils/calculsFinanciers';
+import { estPresidentOuTresorier } from '../utils/roles';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
@@ -148,7 +149,7 @@ export default function DashboardScreen({ userData, navigation }) {
         </View>
       </View>
 
-      {(userData?.role === 'president' || userData?.role === 'tresorier') ? (
+      {estPresidentOuTresorier(userData) ? (
         <View style={styles.quickLinks}>
           <TouchableOpacity onPress={() => navigation.navigate('Profil', { screen: 'RapportMensuel' })}>
             <Text style={styles.quickLinkText}>📄 Rapport mensuel</Text>
@@ -278,7 +279,7 @@ export default function DashboardScreen({ userData, navigation }) {
         </TouchableOpacity>
       )}
 
-      {(userData?.role === 'tresorier' || userData?.role === 'president') && (
+      {estPresidentOuTresorier(userData) && (
         <TouchableOpacity
           style={styles.newTxBtn}
           onPress={() => navigation.navigate('NouvelleTransaction')}

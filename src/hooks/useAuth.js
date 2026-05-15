@@ -11,6 +11,12 @@ import {
   where,
 } from 'firebase/firestore';
 import { auth, db } from '../config/firebase';
+import { roleCanonique } from '../utils/roles';
+
+function profilAvecRoleCanonique(uid, profile) {
+  const role = roleCanonique(profile.role) || profile.role || 'membre';
+  return { uid, ...profile, role };
+}
 
 export function useAuth() {
   const [user, setUser] = useState(null);
@@ -36,7 +42,7 @@ export function useAuth() {
           setDemandeEnAttenteInfo(null);
           return;
         }
-        setUserData({ uid: u.uid, ...profile });
+        setUserData(profilAvecRoleCanonique(u.uid, profile));
         setDemandeEnAttente(false);
         setDemandeEnAttenteInfo(null);
       }
@@ -70,18 +76,11 @@ export function useAuth() {
               setLoading(false);
               return;
             }
-            console.log(
-              '=== PROFIL FIRESTORE ===',
-              JSON.stringify({
-                uid: firebaseUser.uid,
-                email: firebaseUser.email,
-                role: profile.role,
-                roleType: typeof profile.role,
-                roleLength: profile.role?.length,
-                charCodes: profile.role ? [...profile.role].map((c) => c.charCodeAt(0)) : [],
-              })
-            );
-            setUserData({ uid: firebaseUser.uid, ...profile });
+            const profil = profilAvecRoleCanonique(firebaseUser.uid, profile);
+            if (__DEV__ && profile.role !== profil.role) {
+              console.log('[useAuth] rôle canonique:', profile.role, '→', profil.role);
+            }
+            setUserData(profil);
           } else {
             setUserData(null);
             if (!firebaseUser.email) {
@@ -103,7 +102,7 @@ export function useAuth() {
 
             if (!demandeValideeSnap.empty) {
               const demande = demandeValideeSnap.docs[0].data();
-              const profil = {
+              const profilBrut = {
                 uid: firebaseUser.uid,
                 email: firebaseUser.email,
                 nom: demande.nom || firebaseUser.email.split('@')[0],
@@ -112,8 +111,9 @@ export function useAuth() {
                 statut: 'actif',
                 dateInscription: new Date(),
               };
+              const profil = profilAvecRoleCanonique(firebaseUser.uid, profilBrut);
               await setDoc(userRef, profil);
-              setUserData({ uid: firebaseUser.uid, ...profil });
+              setUserData(profil);
               setDemandeEnAttente(false);
               setDemandeEnAttenteInfo(null);
             } else {
