@@ -82,15 +82,15 @@ export default function HistoriqueScreen({ userData }) {
   ];
 
   const typeTransactionFilters = [
-    { key: 'tous', label: 'Tous' },
-    { key: 'cotisation', label: '💰' },
-    { key: 'depense', label: '📉' },
-    { key: 'mobile_money', label: '📱' },
-    { key: 'main_a_main', label: '🤝' },
-    { key: 'vente_recolte', label: '🌾' },
-    { key: 'subvention', label: '🎁' },
-    { key: 'remboursement', label: '🔄' },
-    { key: 'gouvernance', label: '🏛️' },
+    { key: 'tous', label: 'Tous les types' },
+    { key: 'cotisation', label: '💰 Cotisation' },
+    { key: 'depense', label: '📉 Dépense' },
+    { key: 'mobile_money', label: '📱 Mobile money' },
+    { key: 'main_a_main', label: '🤝 Main à main' },
+    { key: 'vente_recolte', label: '🌾 Vente récolte' },
+    { key: 'subvention', label: '🎁 Subvention' },
+    { key: 'remboursement', label: '🔄 Remboursement' },
+    { key: 'gouvernance', label: '🏛️ Gouvernance' },
   ];
 
   useEffect(() => {
@@ -220,44 +220,58 @@ export default function HistoriqueScreen({ userData }) {
         )}
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.typeFiltersScroll}
-      >
-        {typeTransactionFilters.map((f) => (
-          <TouchableOpacity
-            key={f.key}
-            style={[
-              styles.typeChip,
-              activeTypeFilter === f.key ? styles.typeChipActive : styles.typeChipInactive,
-            ]}
-            onPress={() => setActiveTypeFilter(f.key)}
-          >
-            <Text
-              style={[
-                styles.typeChipText,
-                activeTypeFilter === f.key ? styles.typeChipTextActive : styles.typeChipTextInactive,
-              ]}
-            >
-              {f.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+      <View style={styles.filtersCard}>
+        <Text style={styles.filterSectionTitle}>Flux</Text>
+        <Text style={styles.filterSectionHint}>Revenus, dépenses ou transactions en cours</Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.filterScroll}
+          contentContainerStyle={styles.filterScrollContent}
+        >
+          {filters.map((f) => {
+            const active = activeFilter === f.key;
+            return (
+              <TouchableOpacity
+                key={f.key}
+                style={[styles.chip, active ? styles.chipActive : styles.chipIdle]}
+                onPress={() => setActiveFilter(f.key)}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.chipLabel, active ? styles.chipLabelActive : styles.chipLabelIdle]}>
+                  {f.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
 
-      <View style={styles.filtersRow}>
-        {filters.map((f) => (
-          <TouchableOpacity
-            key={f.key}
-            style={[styles.filterBtn, activeFilter === f.key && styles.filterBtnActive]}
-            onPress={() => setActiveFilter(f.key)}
-          >
-            <Text style={[styles.filterText, activeFilter === f.key && styles.filterTextActive]}>
-              {f.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+        <View style={styles.filterSectionDivider} />
+
+        <Text style={styles.filterSectionTitle}>{"Type d'opération"}</Text>
+        <Text style={styles.filterSectionHint}>{"Affinez par nature d'écriture (Firestore)"}</Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.filterScroll}
+          contentContainerStyle={styles.filterScrollContent}
+        >
+          {typeTransactionFilters.map((f) => {
+            const active = activeTypeFilter === f.key;
+            return (
+              <TouchableOpacity
+                key={f.key}
+                style={[styles.chip, active ? styles.chipActive : styles.chipIdle]}
+                onPress={() => setActiveTypeFilter(f.key)}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.chipLabel, active ? styles.chipLabelActive : styles.chipLabelIdle]}>
+                  {f.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
       </View>
 
       {filtered.length === 0 ? (
@@ -267,10 +281,11 @@ export default function HistoriqueScreen({ userData }) {
         </View>
       ) : (
         <FlatList
+          style={styles.list}
           data={filtered}
           keyExtractor={(item) => item.id}
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 100 }}
+          contentContainerStyle={styles.listContent}
           renderItem={({ item: tx }) => {
             const meta = metaFromTx(tx);
             const typeCle = resolveTypeTransaction(tx, meta);
@@ -455,42 +470,73 @@ const styles = StyleSheet.create({
     borderWidth: 1.5, borderColor: '#e5e7eb',
   },
   searchInput: { flex: 1, fontSize: 15, color: '#111827' },
-  typeFiltersScroll: {
-    paddingHorizontal: 16,
-    paddingBottom: 10,
-    gap: 8,
-    alignItems: 'center',
-  },
-  typeChip: {
+  filtersCard: {
+    marginHorizontal: 16,
+    marginBottom: 14,
+    paddingVertical: 14,
     paddingHorizontal: 14,
-    paddingVertical: 9,
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  filterSectionTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: GREEN_DARK,
+    marginBottom: 2,
+  },
+  filterSectionHint: {
+    fontSize: 11,
+    color: '#94a3b8',
+    marginBottom: 10,
+    lineHeight: 15,
+  },
+  filterSectionDivider: {
+    height: 1,
+    backgroundColor: '#e2e8f0',
+    marginVertical: 14,
+  },
+  filterScroll: {
+    flexGrow: 0,
+  },
+  filterScrollContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: 4,
+  },
+  chip: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     borderRadius: 999,
     marginRight: 8,
+    borderWidth: 1.5,
   },
-  typeChipActive: {
+  chipActive: {
     backgroundColor: GREEN,
+    borderColor: GREEN,
   },
-  typeChipInactive: {
-    backgroundColor: '#f1f5f9',
+  chipIdle: {
+    backgroundColor: '#f8fafc',
+    borderColor: '#e2e8f0',
   },
-  typeChipText: {
-    fontSize: 14,
-    fontWeight: '800',
+  chipLabel: {
+    fontSize: 13,
+    fontWeight: '700',
   },
-  typeChipTextActive: {
+  chipLabelActive: {
     color: '#fff',
   },
-  typeChipTextInactive: {
-    color: '#64748b',
+  chipLabelIdle: {
+    color: '#475569',
   },
-  filtersRow: { flexDirection: 'row', paddingHorizontal: 16, gap: 8, marginBottom: 12 },
-  filterBtn: {
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
-    backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#e5e7eb',
-  },
-  filterBtnActive: { backgroundColor: GREEN, borderColor: GREEN },
-  filterText: { fontSize: 13, fontWeight: '600', color: '#6b7280' },
-  filterTextActive: { color: '#fff' },
+  list: { flex: 1 },
+  listContent: { paddingHorizontal: 16, paddingBottom: 24, flexGrow: 1 },
   emptyBox: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
   emptyText: { fontSize: 16, fontWeight: '600', color: '#6b7280' },
   receiptBadge: {
