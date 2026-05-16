@@ -13,7 +13,13 @@ import {
   where,
 } from 'firebase/firestore';
 import { useSendTransaction } from '../hooks/useBlockchain';
-import { polygonscanTxUrl } from '../config/blockchain';
+import {
+  getContractReadOnly,
+  getWalletAddress,
+  isContractConfigured,
+  polygonscanTxUrl,
+  ROLES as ROLES_CHAIN,
+} from '../config/blockchain';
 import { db } from '../config/firebase';
 import { selectImage, uploadJustificatif } from '../utils/uploadImage';
 import { getNombreMembres, getMembresActifs } from '../utils/getMembresActifs';
@@ -30,6 +36,104 @@ const OPERATEURS_DEPENSE = [
 ];
 
 const CATEGORIES = ['Achat intrants', 'Équipement', 'Formation', 'Transport', 'Cotisations', 'Autre'];
+
+/**
+ * Logs de diagnostic au clic sur « Enregistrer sur la Blockchain » / « Soumettre au Vote » :
+ * comparer Firestore (président + utilisateur) avec le contrat (president(), membres(signer)).
+ */
+async function logDiagnosticEnregistrementTransaction({ coopId, profile }) {
+  const tag = '[EnregistrerTransaction]';
+
+  const firestoreActeur = profile
+    ? {
+        id: profile.uid ?? null,
+        uid: profile.uid ?? null,
+        nom: profile.nom ?? null,
+        email: profile.email ?? null,
+        role_brut_firestore: profile.role ?? null,
+        roleCanonique: roleCanonique(profile.role),
+        cooperativeId: profile.cooperativeId ?? coopId,
+        statut: profile.statut ?? null,
+        walletAddressFirestore: profile.walletAddress || null,
+        telephone: profile.telephone ?? profile.phone ?? profile.tel ?? null,
+      }
+    : null;
+
+  let presidentsFirestore = [];
+  try {
+    const pq = query(
+      collection(db, 'users'),
+      where('cooperativeId', '==', coopId),
+      where('role', '==', 'president')
+    );
+    const psnap = await getDocs(pq);
+    presidentsFirestore = psnap.docs.map((d) => {
+      const p = d.data();
+      return {
+        id_document: d.id,
+        uid: d.id,
+        nom: p.nom ?? null,
+        email: p.email ?? null,
+        role: p.role ?? null,
+        cooperativeId: p.cooperativeId ?? null,
+        statut: p.statut ?? null,
+        walletAddress: p.walletAddress || null,
+        telephone: p.telephone ?? p.phone ?? p.tel ?? null,
+        dateInscription: p.dateInscription ?? null,
+      };
+    });
+  } catch (e) {
+    console.warn(tag, 'Lecture président Firestore impossible:', e?.message ?? e);
+  }
+
+  let adresseSignerLocal = null;
+  let lectureChaine = null;
+  try {
+    adresseSignerLocal = await getWalletAddress();
+    if (!isContractConfigured()) {
+      lectureChaine = {
+        erreur:
+          'Contrat non configuré (vérifie CONTRACT_ADDRESS dans src/config/contract.js).',
+      };
+    } else {
+      const contract = getContractReadOnly();
+      const prezOnChain = await contract.president();
+      const m = await contract.membres(adresseSignerLocal);
+      const roleNum = Number(m.role);
+      lectureChaine = {
+        presidentOnChain_address: prezOnChain,
+        walletQuiSigne_laTransaction: adresseSignerLocal,
+        membre_signer_via_membres_mapping: {
+          wallet_chain: m.wallet,
+          nom_chain: m.nom,
+          role_num: roleNum,
+          role_label: ROLES_CHAIN[roleNum] ?? String(roleNum),
+          actif_chain: !!m.actif,
+        },
+        alignement: {
+          president_fs_wallet_vs_chain:
+            presidentsFirestore.length === 1 && presidentsFirestore[0].walletAddress
+              ? String(presidentsFirestore[0].walletAddress).toLowerCase()
+                === String(prezOnChain).toLowerCase()
+              : null,
+          signer_est_president_chain:
+            String(adresseSignerLocal).toLowerCase() === String(prezOnChain).toLowerCase(),
+        },
+      };
+    }
+  } catch (e) {
+    lectureChaine = { erreur_lecture: e?.message ?? String(e) };
+  }
+
+  console.log(`${tag} — diagnostic soumission transaction`);
+  console.log(`${tag} cooperativeId utilisé:`, coopId);
+  console.log(`${tag} utilisateur connecté (Firestore):`, JSON.stringify(firestoreActeur, null, 2));
+  console.log(
+    `${tag} président(s) dans Firestore (${presidentsFirestore.length} doc(s)): `,
+    JSON.stringify(presidentsFirestore, null, 2)
+  );
+  console.log(`${tag} chaîne Polygon (contrat):`, JSON.stringify(lectureChaine, null, 2));
+}
 
 export default function NouvelleTransactionScreen({ userData, navigation, route }) {
   const profile = userData ?? route?.params?.userData ?? null;
@@ -187,6 +291,8 @@ export default function NouvelleTransactionScreen({ userData, navigation, route 
 
     try {
       const coopId = profile?.cooperativeId || 'broukou';
+
+      await logDiagnosticEnregistrementTransaction({ coopId, profile });
 
       if (form.type === 'sortie') {
         const result = await verifierSolde(montantNum, coopId);
