@@ -599,7 +599,11 @@ export default function NouvelleTransactionScreen({ userData, navigation, route 
   }
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+    >
       <View style={{ padding: 20 }}>
         {peutCreerTransactions && (
           <TouchableOpacity
@@ -1012,8 +1016,6 @@ export default function NouvelleTransactionScreen({ userData, navigation, route 
             En attente de confirmation du bloc Polygon (~5-30 sec)...
           </Text>
         )}
-
-        <View style={{ height: 40 }} />
       </View>
     </ScrollView>
   );
@@ -1021,6 +1023,7 @@ export default function NouvelleTransactionScreen({ userData, navigation, route 
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8fafc' },
+  scrollContent: { flexGrow: 1, paddingBottom: 32 },
   soldeCard: {
     backgroundColor: '#f1f5f9',
     borderWidth: 1,

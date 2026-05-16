@@ -79,7 +79,7 @@ function BoutonOngletNouvelleTransaction({ userData, ...props }) {
           backgroundColor: '#15803d',
           alignItems: 'center',
           justifyContent: 'center',
-          marginBottom: 20,
+          marginBottom: 8,
           elevation: 8,
           shadowColor: '#15803d',
           shadowOffset: { width: 0, height: 4 },
@@ -186,27 +186,25 @@ export default function AppNavigator({ userData }) {
 
   return (
     <Tab.Navigator
+      sceneContainerStyle={{ flex: 1 }}
       screenOptions={{
         headerShown: false,
         tabBarShowLabel: false,
         tabBarHideOnKeyboard: true,
+        // Barre en flux (sans position absolute) : l’espace est réservé au-dessus,
+        // le contenu scrollable n’est plus recouvert.
         tabBarStyle: {
-          position: 'absolute',
-          bottom: 0,
-          left: 0,
-          right: 0,
           height: tabBarHeight,
           backgroundColor: '#ffffff',
           borderTopWidth: 1,
           borderTopColor: '#f1f5f9',
           paddingBottom: tabBarBottomPadding,
           paddingTop: 8,
-          elevation: 20,
+          elevation: 12,
           shadowColor: '#000',
           shadowOffset: { width: 0, height: -4 },
           shadowOpacity: 0.1,
           shadowRadius: 12,
-          zIndex: 999,
         },
       }}
     >
