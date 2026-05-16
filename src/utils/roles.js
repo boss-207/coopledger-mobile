@@ -44,7 +44,7 @@ export function normaliserRole(role) {
 export function roleCanonique(role) {
   const n = normaliserRole(role);
   if (!n) return '';
-  if (ALIASE_VERS_CANONIQUE[n]) return ALIAS_VERS_CANONIQUE[n];
+  if (ALIAS_VERS_CANONIQUE[n]) return ALIAS_VERS_CANONIQUE[n];
   if (n.includes('president')) return ROLES.PRESIDENT;
   if (n.includes('tresorier') || n.includes('treasurer') || n.includes('caissier')) {
     return ROLES.TRESORIER;
