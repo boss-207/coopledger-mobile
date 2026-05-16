@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   getContractReadOnly,
-  getContractWithSigner,
-  getWalletAddress,
+  getContractWithSignerFromWallet,
+  getOrCreateWallet,
   fcfaToChain,
   chainToFcfa,
   STATUT_TX,
@@ -11,6 +11,17 @@ import {
   ROLES,
   parseBlockchainError,
 } from '../config/blockchain';
+import { getWalletMembre } from '../utils/walletManager';
+
+async function resolveSigningWallet(uid) {
+  if (!uid) return getOrCreateWallet();
+  try {
+    return await getWalletMembre(uid);
+  } catch (e) {
+    console.warn('[useBlockchain] Wallet Firestore indisponible, fallback AsyncStorage:', e?.message);
+    return getOrCreateWallet();
+  }
+}
 
 // Cache local des tx hashes (transactionId → txHash on-chain)
 const TX_HASHES_KEY = '@coopledger_tx_hashes';
@@ -230,7 +241,7 @@ export function useSolde() {
 
 // ─── sendTransaction ──────────────────────────────────────────────────────────
 
-export function useSendTransaction() {
+export function useSendTransaction(uid) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -243,7 +254,8 @@ export function useSendTransaction() {
     setLoading(true);
     setError(null);
     try {
-      const contract = await getContractWithSigner();
+      const wallet = await resolveSigningWallet(uid);
+      const contract = getContractWithSignerFromWallet(wallet);
       const montantChain = fcfaToChain(montant);
 
       const tx = await contract.enregistrerTransaction(
@@ -279,14 +291,14 @@ export function useSendTransaction() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [uid]);
 
   return { sendTransaction, loading, error };
 }
 
 // ─── vote ──────────────────────────────────────────────────────────────────────
 
-export function useVoter() {
+export function useVoter(uid) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -294,7 +306,8 @@ export function useVoter() {
     setLoading(true);
     setError(null);
     try {
-      const contract = await getContractWithSigner();
+      const wallet = await resolveSigningWallet(uid);
+      const contract = getContractWithSignerFromWallet(wallet);
       const tx = choix === 'oui'
         ? await contract.voterOui(transactionId)
         : await contract.voterNon(transactionId);
@@ -327,14 +340,14 @@ export function useVoter() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [uid]);
 
   return { voter, loading, error };
 }
 
 // ─── useMembres (admin) ───────────────────────────────────────────────────────
 
-export function useMembres() {
+export function useMembres(uid) {
   const [membres, setMembres] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -360,39 +373,43 @@ export function useMembres() {
   useEffect(() => { charger(); }, [charger]);
 
   const addMember = useCallback(async (wallet, nom) => {
-    const contract = await getContractWithSigner();
+    const w = await resolveSigningWallet(uid);
+    const contract = getContractWithSignerFromWallet(w);
     const tx = await contract.addMember(wallet, nom);
     await tx.wait();
     await charger();
     return tx.hash;
-  }, [charger]);
+  }, [charger, uid]);
 
   const removeMember = useCallback(async (wallet) => {
-    const contract = await getContractWithSigner();
+    const w = await resolveSigningWallet(uid);
+    const contract = getContractWithSignerFromWallet(w);
     const tx = await contract.removeMember(wallet);
     await tx.wait();
     await charger();
     return tx.hash;
-  }, [charger]);
+  }, [charger, uid]);
 
   const setRole = useCallback(async (wallet, role) => {
     const roleMap = { membre: 1, tresorier: 2 };
     const roleNum = roleMap[role];
     if (!roleNum) throw new Error('Rôle invalide. Utiliser "membre" ou "tresorier"');
-    const contract = await getContractWithSigner();
+    const w = await resolveSigningWallet(uid);
+    const contract = getContractWithSignerFromWallet(w);
     const tx = await contract.setRole(wallet, roleNum);
     await tx.wait();
     await charger();
     return tx.hash;
-  }, [charger]);
+  }, [charger, uid]);
 
   const transferPresidence = useCallback(async (wallet) => {
-    const contract = await getContractWithSigner();
+    const w = await resolveSigningWallet(uid);
+    const contract = getContractWithSignerFromWallet(w);
     const tx = await contract.transferPresidence(wallet);
     await tx.wait();
     await charger();
     return tx.hash;
-  }, [charger]);
+  }, [charger, uid]);
 
   return {
     membres,
@@ -408,12 +425,21 @@ export function useMembres() {
 
 // ─── useWalletAddress ──────────────────────────────────────────────────────────
 
-export function useWalletAddress() {
+export function useWalletAddress(uid) {
   const [address, setAddress] = useState(null);
 
   useEffect(() => {
-    getWalletAddress().then(setAddress).catch(() => {});
-  }, []);
+    let alive = true;
+    (async () => {
+      try {
+        const w = await resolveSigningWallet(uid);
+        if (alive) setAddress(w.address);
+      } catch {
+        if (alive) setAddress(null);
+      }
+    })();
+    return () => { alive = false; };
+  }, [uid]);
 
   return address;
 }

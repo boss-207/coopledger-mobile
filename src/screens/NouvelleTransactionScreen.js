@@ -26,6 +26,7 @@ import { getNombreMembres, getMembresActifs } from '../utils/getMembresActifs';
 import { calculerSolde, verifierSolde, formaterMontant } from '../utils/soldeUtils';
 import { envoyerNotifPush } from '../services/pushService';
 import { peutCreerTransaction, roleCanonique } from '../utils/roles';
+import { getWalletMembre } from '../utils/walletManager';
 
 const GREEN = '#15803d';
 const GREEN_DARK = '#14532d';
@@ -36,6 +37,15 @@ const OPERATEURS_DEPENSE = [
 ];
 
 const CATEGORIES = ['Achat intrants', 'Équipement', 'Formation', 'Transport', 'Cotisations', 'Autre'];
+
+/** Le + du tab ouvre parfois cette pile sans historique → goBack() échoue. */
+function retourDepuisNouvelleTransaction(navigation) {
+  if (navigation?.canGoBack?.()) {
+    navigation.goBack();
+    return;
+  }
+  navigation.navigate('DashboardMain');
+}
 
 /**
  * Logs de diagnostic au clic sur « Enregistrer sur la Blockchain » / « Soumettre au Vote » :
@@ -89,7 +99,16 @@ async function logDiagnosticEnregistrementTransaction({ coopId, profile }) {
   let adresseSignerLocal = null;
   let lectureChaine = null;
   try {
-    adresseSignerLocal = await getWalletAddress();
+    if (profile?.uid) {
+      try {
+        const w = await getWalletMembre(profile.uid);
+        adresseSignerLocal = w.address;
+      } catch {
+        adresseSignerLocal = await getWalletAddress();
+      }
+    } else {
+      adresseSignerLocal = await getWalletAddress();
+    }
     if (!isContractConfigured()) {
       lectureChaine = {
         erreur:
@@ -163,7 +182,7 @@ export default function NouvelleTransactionScreen({ userData, navigation, route 
   const [soldeDisponible, setSoldeDisponible] = useState(0);
   const [soldeLoading, setSoldeLoading] = useState(true);
 
-  const { sendTransaction, loading } = useSendTransaction();
+  const { sendTransaction, loading } = useSendTransaction(profile?.uid);
 
   const update = (key, val) => setForm(prev => ({ ...prev, [key]: val }));
   const montantNum = parseFloat(form.montant) || 0;
@@ -485,7 +504,7 @@ export default function NouvelleTransactionScreen({ userData, navigation, route 
           baseMsg + suffix,
           [
             { text: 'Voir sur Polygonscan', onPress: () => Linking.openURL(scanUrl) },
-            { text: 'OK', onPress: () => navigation.goBack() },
+            { text: 'OK', onPress: () => retourDepuisNouvelleTransaction(navigation) },
           ]
         );
       } else {
@@ -494,7 +513,7 @@ export default function NouvelleTransactionScreen({ userData, navigation, route 
           baseMsg + suffix,
           [
             { text: 'Voir sur Polygonscan', onPress: () => Linking.openURL(scanUrl) },
-            { text: 'OK', onPress: () => navigation.goBack() },
+            { text: 'OK', onPress: () => retourDepuisNouvelleTransaction(navigation) },
           ]
         );
       }

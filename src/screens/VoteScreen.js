@@ -104,7 +104,7 @@ function Timer({ dateExpiration }) {
 
 export default function VoteScreen({ userData }) {
   const { votes, historique, loading, refetch } = useVotes();
-  const { voter, loading: votingLoading } = useVoter();
+  const { voter, loading: votingLoading } = useVoter(userData?.uid);
   const [votingId, setVotingId] = useState(null);
   const [mesVotes, setMesVotes] = useState({});
 

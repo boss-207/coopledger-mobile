@@ -21,11 +21,10 @@ import { useVotes } from '../hooks/useBlockchain';
 import { quitterCooperative } from '../utils/getMembresActifs';
 import {
   getWalletAddress,
-  importWalletFromPrivateKey,
   isContractConfigured,
   polygonscanAddressUrl,
 } from '../config/blockchain';
-import { genererWallet, getAdresseWallet, truncateAddress } from '../utils/walletManager';
+import { genererWallet, getAdresseWallet, importWalletPrivateKeyForUser, truncateAddress } from '../utils/walletManager';
 import { CONTRACT_ADDRESS } from '../config/contract';
 
 const GREEN = '#15803d';
@@ -263,7 +262,7 @@ export default function ProfileScreen({ userData }) {
     }
     setImportLoading(true);
     try {
-      const addr = await importWalletFromPrivateKey(pkInput);
+      const addr = await importWalletPrivateKeyForUser(userData.uid, pkInput);
       setWalletAddress(addr);
       setPkInput('');
       setModalImport(false);
@@ -391,19 +390,21 @@ export default function ProfileScreen({ userData }) {
           label="Wallet app"
           value={walletAddress ? `${walletAddress.slice(0, 8)}…${walletAddress.slice(-6)}` : '…'}
         />
-        {walletAddress && (
-          <View style={{ flexDirection: 'row', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
-            <TouchableOpacity style={styles.smallBtn} onPress={partagerAdresse}>
-              <Text style={styles.smallBtnText}>Partager l’adresse</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.smallBtn} onPress={() => Linking.openURL(polygonscanAddressUrl(walletAddress))}>
-              <Text style={styles.smallBtnText}>Polygonscan</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.smallBtn, styles.smallBtnOutline]} onPress={() => setModalImport(true)}>
-              <Text style={[styles.smallBtnText, { color: GREEN }]}>Importer MetaMask</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+        <View style={{ flexDirection: 'row', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+          {walletAddress ? (
+            <>
+              <TouchableOpacity style={styles.smallBtn} onPress={partagerAdresse}>
+                <Text style={styles.smallBtnText}>Partager l’adresse</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.smallBtn} onPress={() => Linking.openURL(polygonscanAddressUrl(walletAddress))}>
+                <Text style={styles.smallBtnText}>Polygonscan</Text>
+              </TouchableOpacity>
+            </>
+          ) : null}
+          <TouchableOpacity style={[styles.smallBtn, styles.smallBtnOutline]} onPress={() => setModalImport(true)}>
+            <Text style={[styles.smallBtnText, { color: GREEN }]}>Importer MetaMask</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* INFOS COOPÉRATIVE */}

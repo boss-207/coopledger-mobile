@@ -68,6 +68,16 @@ export async function importWalletFromPrivateKey(privateKeyInput) {
   return wallet.address;
 }
 
+/** Met à jour uniquement le wallet « appareil » (fallback si pas de uid / Firestore). */
+export async function setDeviceWalletPrivateKey(privateKey) {
+  const pk = String(privateKey).trim().replace(/\s/g, '');
+  const normalized = pk.startsWith('0x') ? pk : `0x${pk}`;
+  if (!/^0x[a-fA-F0-9]{64}$/.test(normalized)) {
+    throw new Error('Format de clé privée invalide (64 caractères hex après 0x).');
+  }
+  await AsyncStorage.setItem(WALLET_KEY, normalized);
+}
+
 // ─── Contract instances ──────────────────────────────────────────────────────
 
 /**
@@ -87,7 +97,20 @@ export function getContractReadOnly() {
  */
 export async function getContractWithSigner() {
   const wallet = await getOrCreateWallet();
-  return new ethers.Contract(CONTRACT_ADDRESS, CoopLedgerABI, wallet);
+  return getContractWithSignerFromWallet(wallet);
+}
+
+/**
+ * Contrat avec le wallet explicite (ex. clé Firestore du compte connecté).
+ */
+export function getContractWithSignerFromWallet(wallet) {
+  if (!isContractConfigured()) {
+    throw new Error(
+      'Contrat non configuré : déploie avec Hardhat puis mets à jour src/config/contract.js (CONTRACT_ADDRESS).'
+    );
+  }
+  const signer = wallet.connect(provider);
+  return new ethers.Contract(CONTRACT_ADDRESS, CoopLedgerABI, signer);
 }
 
 // ─── Helpers montants ─────────────────────────────────────────────────────────
@@ -170,8 +193,8 @@ export function parseBlockchainError(err) {
   if (msg.includes('expire')) {
     return 'Ce vote a expiré sans atteindre le quorum.';
   }
-  if (msg.includes('pas membre')) {
-    return 'Tu n\'es pas membre de cette coopérative.';
+  if (msg.includes('pas membre') || msg.includes("n'est pas membre") || msg.includes('pas membre de cette cooperative')) {
+    return 'Tu n\'es pas membre actif de cette coopérative sur la blockchain (addMember / wallet différent).';
   }
   if (msg.includes('nonce') || msg.includes('replacement')) {
     return 'Transaction en attente. Réessaie dans quelques instants.';
