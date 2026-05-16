@@ -1,16 +1,47 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+
+import Svg, { Circle, G, Text as SvgText } from 'react-native-svg'; // ✅ une seule ligne
+
+import * as Print from 'expo-print';
+
+import * as Sharing from 'expo-sharing';
+
+import { Share } from 'react-native';
+
 import {
-  View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, ActivityIndicator, Alert, Linking, Image,
+
+View,
+
+Text,
+
+StyleSheet,
+
+ScrollView,
+
+ActivityIndicator,
+
+TouchableOpacity,
+
+Linking,
+
+Alert,
+
 } from 'react-native';
+
 import {
-  collection,
-  doc,
-  getDocs,
-  query,
-  setDoc,
-  Timestamp,
-  where,
+
+collection,
+
+limit,
+
+onSnapshot,
+
+orderBy,
+
+query,
+
+where,
+
 } from 'firebase/firestore';
 import { useSendTransaction } from '../hooks/useBlockchain';
 import {
@@ -28,14 +59,20 @@ import { envoyerNotifPush } from '../services/pushService';
 import { peutCreerTransaction, roleCanonique } from '../utils/roles';
 
 const GREEN = '#15803d';
+
 const GREEN_DARK = '#14532d';
 
-const OPERATEURS_DEPENSE = [
-  { key: 'MOOV', label: 'Moov Flooz', couleur: '#0066CC', fond: '#e8f0fe', emoji: '🔵' },
-  { key: 'TMONEY', label: 'T-Money', couleur: '#E30613', fond: '#fde8ea', emoji: '🔴' },
-];
+const COOP_NOM = 'CTA de Broukou';
 
-const CATEGORIES = ['Achat intrants', 'Équipement', 'Formation', 'Transport', 'Cotisations', 'Autre'];
+const COOP_REGION = 'Région de la Kara';
+
+  
+
+function getDate(raw) {
+
+const d = raw?.toDate ? raw.toDate() : new Date(raw);
+
+return Number.isNaN(d.getTime()) ? null : d;
 
 /**
  * Logs de diagnostic au clic sur « Enregistrer sur la Blockchain » / « Soumettre au Vote » :
@@ -163,13 +200,9 @@ export default function NouvelleTransactionScreen({ userData, navigation, route 
   const [soldeDisponible, setSoldeDisponible] = useState(0);
   const [soldeLoading, setSoldeLoading] = useState(true);
 
-  const { sendTransaction, loading } = useSendTransaction();
+function DonutChart({ revenus, depenses }) {
 
-  const update = (key, val) => setForm(prev => ({ ...prev, [key]: val }));
-  const montantNum = parseFloat(form.montant) || 0;
-  const needsVote = montantNum >= 500000;
-  const busy = loading || uploadingJustificatif;
-  const depasseSolde = form.type === 'sortie' && !soldeLoading && montantNum > soldeDisponible;
+const total = revenus + depenses;
 
   const peutCreerTransactions = peutCreerTransaction(profile);
   const roleManquant = Boolean(profile?.uid) && !profile?.role;
@@ -216,20 +249,9 @@ export default function NouvelleTransactionScreen({ userData, navigation, route 
     return () => { alive = false; };
   }, [form.type, profile?.cooperativeId]);
 
-  async function ajouterJustificatif() {
-    try {
-      const uri = await selectImage();
-      if (!uri) return;
-      setJustificatifUri(uri);
-    } catch (err) {
-      Alert.alert('Erreur', err.message || 'Impossible de sélectionner l’image. Vérifie ta connexion et les permissions.');
-    }
-  }
+  
 
-  function retirerJustificatif() {
-    setJustificatifUri(null);
-    setUploadProgress(0);
-  }
+const radius = 70;
 
   async function soumettre() {
     if (profile == null) {
@@ -249,92 +271,30 @@ export default function NouvelleTransactionScreen({ userData, navigation, route 
       return Alert.alert('Connexion requise', 'Connecte-toi pour joindre un justificatif (identifiant membre).');
     }
 
-    if (form.type === 'sortie' && form.modePaiement === 'especes' && !justificatifUri) {
-      return Alert.alert(
-        'Erreur',
-        '📸 Photo du reçu signé obligatoire pour un paiement en espèces.'
-      );
-    }
+const circumference = 2 * Math.PI * radius;
 
-    if (form.type === 'sortie' && form.modePaiement === 'mobile_money') {
-      if (!form.operateurMobile) {
-        return Alert.alert('Erreur', 'Sélectionne Moov Flooz ou T-Money.');
-      }
-      const tel = form.telephoneFournisseur.trim();
-      if (tel.length < 8) {
-        return Alert.alert(
-          'Erreur',
-          'Indique le numéro Mobile Money du fournisseur pour ce mode de paiement.'
-        );
-      }
-    }
+const dashEntrees = (revenus / total) * circumference;
 
-    if (form.type === 'sortie' && form.modePaiement === 'virement') {
-      const digits = form.numeroCarte.replace(/\D/g, '');
-      if (digits.length < 16) {
-        return Alert.alert('Erreur', 'Indique un numéro de carte à 16 chiffres (démo).');
-      }
-      if (!form.dateExpirationCarte.trim() || form.dateExpirationCarte.trim().length < 4) {
-        return Alert.alert('Erreur', 'Indique la date d’expiration (MM/AA).');
-      }
-      if (!form.cvvCarte.trim() || form.cvvCarte.trim().length < 3) {
-        return Alert.alert('Erreur', 'Indique le CVV (3 chiffres).');
-      }
-    }
+const dashDepenses = (depenses / total) * circumference;
 
-    if (form.type === 'entree' && form.sourceRevenu === 'cotisation_membre' && !form.membreCotisationUid) {
-      return Alert.alert('Erreur', 'Sélectionne le membre qui effectue la cotisation.');
-    }
-    if (form.type === 'entree' && form.sourceRevenu !== 'cotisation_membre' && !form.payeurNom.trim()) {
-      return Alert.alert('Erreur', 'Indique le nom du payeur ou de la source du revenu.');
-    }
+  
 
     try {
       const coopId = profile?.cooperativeId || 'broukou';
 
       await logDiagnosticEnregistrementTransaction({ coopId, profile });
 
-      if (form.type === 'sortie') {
-        const result = await verifierSolde(montantNum, coopId);
-        if (!result.suffisant) {
-          Alert.alert(
-            '❌ Solde insuffisant',
-            `Solde disponible : ${formaterMontant(result.soldeActuel)}\n\nMontant demandé : ${formaterMontant(result.montantDemande)}\n\nIl manque : ${formaterMontant(Math.abs(result.difference))}`
-          );
-          return;
-        }
-      }
+try {
 
-      let totalMembresActifs = 0;
-      try {
-        totalMembresActifs = await getNombreMembres(coopId);
-      } catch {
-        totalMembresActifs = 0;
-      }
+const mois = r.mois || 'Mois';
 
-      const titreComplet = form.fournisseur.trim()
-        ? `${form.titre.trim()} — ${form.fournisseur.trim()}`
-        : form.titre.trim();
+const annee = r.annee || '';
 
-      const typeTxFirestore = form.type === 'sortie'
-        ? 'depense'
-        : form.sourceRevenu === 'cotisation_membre'
-          ? 'cotisation'
-          : form.sourceRevenu === 'vente_recolte'
-            ? 'vente_recolte'
-            : form.sourceRevenu === 'subvention'
-              ? 'subvention'
-              : 'remboursement';
+const dateEnvoi = getDate(r.dateEnvoi);
 
-      const { hash, transactionId, voteDeclenche } = await sendTransaction({
-        titre: titreComplet,
-        montant: montantNum,
-        categorie: form.categorie || 'Autre',
-        typeTransaction: form.type,
-      });
+const dateStr = dateEnvoi ? dateEnvoi.toLocaleDateString('fr-FR') : '-';
 
-      const hashCourt = `${hash.slice(0, 10)}...${hash.slice(-6)}`;
-      const scanUrl = polygonscanTxUrl(hash);
+const htmlContent = `
 
       const dossierFirestore = {
         titre: titreComplet,
@@ -372,7 +332,7 @@ export default function NouvelleTransactionScreen({ userData, navigation, route 
             : null,
       };
 
-      let justificatifOk = false;
+<h1 style="color: #14532d;">📄 Rapport Mensuel – ${mois} ${annee}</h1>
 
       if (justificatifUri && profile && transactionId !== null && transactionId !== undefined) {
         setUploadingJustificatif(true);
@@ -383,130 +343,21 @@ export default function NouvelleTransactionScreen({ userData, navigation, route 
             onProgress: (pct) => setUploadProgress(pct),
           });
 
-          if (payload?.url) {
-            await setDoc(
-              doc(db, 'transactions', `chain_${transactionId}`),
-              {
-                ...dossierFirestore,
-                justificatif: {
-                  url: payload.url,
-                  publicId: payload.publicId,
-                  width: payload.width ?? null,
-                  height: payload.height ?? null,
-                  uploadedAt: Timestamp.fromDate(
-                    payload.uploadedAt instanceof Date ? payload.uploadedAt : new Date()
-                  ),
-                  uploadedBy: payload.uploadedBy,
-                  uploadedByNom: payload.uploadedByNom,
-                },
-              },
-              { merge: true }
-            );
-            justificatifOk = true;
-          } else {
-            await setDoc(
-              doc(db, 'transactions', `chain_${transactionId}`),
-              dossierFirestore,
-              { merge: true }
-            );
-          }
-        } catch (uploadErr) {
-          Alert.alert(
-            'Justificatif',
-            uploadErr.message
-              || 'Erreur réseau ou Cloudinary. La transaction est bien sur Polygon, mais le justificatif n’a pas été enregistré.'
-          );
-          try {
-            await setDoc(
-              doc(db, 'transactions', `chain_${transactionId}`),
-              dossierFirestore,
-              { merge: true }
-            );
-          } catch (_) {
-            /* ignore */
-          }
-        } finally {
-          setUploadingJustificatif(false);
-          setUploadProgress(0);
-        }
-      } else if (transactionId !== null && transactionId !== undefined) {
-        await setDoc(
-          doc(db, 'transactions', `chain_${transactionId}`),
-          dossierFirestore,
-          { merge: true }
-        );
-      } else if (justificatifUri) {
-        Alert.alert(
-          'Justificatif',
-          'La transaction est confirmée sur Polygon, mais l’identifiant interne n’a pas été retrouvé : le justificatif n’a pas été lié dans l’app. Tu peux réessayer plus tard depuis une mise à jour.'
-        );
-      }
+<p><strong>Envoyé le :</strong> ${dateStr}</p>
 
-      try {
-        const membresSnap = await getDocs(
-          query(
-            collection(db, 'users'),
-            where('cooperativeId', '==', coopId),
-            where('statut', '==', 'actif')
-          )
-        );
-        const tokens = membresSnap.docs
-          .map((d) => d.data().expoPushToken)
-          .filter(Boolean);
+<p><strong>Membres notifiés :</strong> ${Number(r.nombreNotifies || 0)}</p>
 
-        const depasse = voteDeclenche || montantNum >= 500000;
+<hr/>
 
-        await envoyerNotifPush({
-          tokens,
-          titre: depasse
-            ? '🗳️ Vote requis !'
-            : '💰 Nouvelle transaction',
-          message: depasse
-            ? `${form.titre} — ${Math.round(montantNum).toLocaleString('fr-FR')} FCFA\nUn vote a été déclenché.`
-            : `${form.titre} — ${Math.round(montantNum).toLocaleString('fr-FR')} FCFA`,
-          data: {
-            type: depasse ? 'NEW_VOTE' : 'NEW_TRANSACTION',
-            cooperativeId: coopId,
-          },
-        });
-      } catch (notifErr) {
-        console.log('Notif error:', notifErr);
-      }
+<h2>Résumé financier</h2>
 
-      const baseMsg = voteDeclenche
-        ? `La transaction dépasse 500 000 FCFA.\n\nUn vote a été déclenché automatiquement sur Polygon (total membres figé à ce moment sur la chaîne).\n\nRéférence coopérative : ${totalMembresActifs} membre(s) actif(s) dans Firestore.\n\nHash : ${hashCourt}`
-        : `Transaction confirmée sur Polygon Amoy.\n\nHash : ${hashCourt}`;
+<p>Ce rapport a été généré automatiquement depuis CoopLedger.</p>
 
-      const suffix = justificatifOk ? '\n\n📎 Justificatif ajouté ✅' : '';
+<p style="font-size:11px; color:#6b7280;">Source : Registre Firestore + preuves blockchain</p>
 
-      if (voteDeclenche) {
-        Alert.alert(
-          '⚡ Vote déclenché !',
-          baseMsg + suffix,
-          [
-            { text: 'Voir sur Polygonscan', onPress: () => Linking.openURL(scanUrl) },
-            { text: 'OK', onPress: () => navigation.goBack() },
-          ]
-        );
-      } else {
-        Alert.alert(
-          '✅ Transaction enregistrée !',
-          baseMsg + suffix,
-          [
-            { text: 'Voir sur Polygonscan', onPress: () => Linking.openURL(scanUrl) },
-            { text: 'OK', onPress: () => navigation.goBack() },
-          ]
-        );
-      }
+</body></html>
 
-      try {
-        const soldeMaj = await calculerSolde(coopId);
-        setSoldeDisponible(soldeMaj);
-      } catch {}
-    } catch (err) {
-      Alert.alert('Erreur', err.message || 'Impossible d\'enregistrer la transaction. Réessaie.');
-    }
-  }
+`;
 
   if (profile == null || roleManquant) {
     return (
@@ -591,592 +442,1458 @@ export default function NouvelleTransactionScreen({ userData, navigation, route 
           </TouchableOpacity>
         )}
 
-        <View style={styles.soldeCard}>
-          {soldeLoading ? (
-            <View style={styles.soldeLoadingRow}>
-              <ActivityIndicator color={GREEN} size="small" />
-              <Text style={styles.soldeLoadingText}>Chargement du solde...</Text>
-            </View>
-          ) : (
-            <Text style={styles.soldeText}>
-              💰 Solde disponible : {formaterMontant(soldeDisponible)}
-            </Text>
-          )}
-        </View>
+dialogTitle: `Rapport ${mois} ${annee}`,
 
-        {/* TYPE */}
-        <Text style={styles.label}>TYPE DE TRANSACTION</Text>
-        <View style={styles.typeRow}>
-          {[
-            { key: 'sortie', icon: '📉', label: 'Dépense' },
-            { key: 'entree', icon: '📈', label: 'Revenu' },
-          ].map(t => (
-            <TouchableOpacity
-              key={t.key}
-              style={[styles.typeBtn, form.type === t.key && styles.typeBtnActive]}
-              onPress={() => update('type', t.key)}
-            >
-              <Text style={{ fontSize: 24 }}>{t.icon}</Text>
-              <Text style={[styles.typeBtnText, form.type === t.key && styles.typeBtnTextActive]}>
-                {t.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+UTI: 'com.adobe.pdf',
 
-        {/* TITRE */}
-        <Text style={styles.label}>INTITULÉ *</Text>
-        <View style={styles.inputBox}>
-          <TextInput
-            style={styles.input}
-            placeholder="Ex : Achat engrais NPK"
-            placeholderTextColor="#9ca3af"
-            value={form.titre}
-            onChangeText={v => update('titre', v)}
-          />
-        </View>
+});
 
-        {/* MONTANT */}
-        <Text style={styles.label}>MONTANT (FCFA) *</Text>
-        <View style={styles.inputBox}>
-          <Text style={{ fontSize: 18, marginRight: 8 }}>💰</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Ex : 750000"
-            placeholderTextColor="#9ca3af"
-            value={form.montant}
-            onChangeText={v => update('montant', v)}
-            keyboardType="numeric"
-          />
-        </View>
-        {depasseSolde && (
-          <Text style={styles.soldeWarnText}>
-            ⚠️ Montant supérieur au solde disponible
-          </Text>
-        )}
+} catch (e) {
 
-        {needsVote && (
-          <View style={styles.alertBox}>
-            <Text style={{ fontSize: 20 }}>⚡</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.alertTitle}>Vote automatique requis</Text>
-              <Text style={styles.alertSub}>
-                Ce montant dépasse 500 000 FCFA. Un vote de 60% des membres sera déclenché automatiquement sur Polygon.
-              </Text>
-            </View>
-          </View>
-        )}
+Alert.alert('Erreur', 'Impossible de générer le PDF.');
 
-        {form.type === 'entree' ? (
-          <View style={styles.revenuSection}>
-            <Text style={styles.label}>SOURCE DU REVENU</Text>
-            <View style={styles.paymentModeRow}>
-              {[
-                { key: 'cotisation_membre', emoji: '💰', label: 'Cotisation membre' },
-                { key: 'vente_recolte', emoji: '🌾', label: 'Vente récolte' },
-                { key: 'subvention', emoji: '🏛️', label: 'Subvention / Don' },
-                { key: 'remboursement', emoji: '🔄', label: 'Remboursement' },
-              ].map((src) => (
-                <TouchableOpacity
-                  key={src.key}
-                  style={[
-                    styles.paymentModeBtn,
-                    form.sourceRevenu === src.key && styles.paymentModeBtnActive,
-                  ]}
-                  onPress={() => update('sourceRevenu', src.key)}
-                >
-                  <Text style={styles.paymentModeEmoji}>{src.emoji}</Text>
-                  <Text
-                    style={[
-                      styles.paymentModeText,
-                      form.sourceRevenu === src.key && styles.paymentModeTextActive,
-                    ]}
-                  >
-                    {src.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {form.sourceRevenu === 'cotisation_membre' ? (
-              <View style={{ marginTop: 12 }}>
-                <Text style={styles.label}>MEMBRE</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }}>
-                  {membresCotisation.map((m) => {
-                    const uid = m.uid || m.id;
-                    const sel = form.membreCotisationUid === uid;
-                    return (
-                      <TouchableOpacity
-                        key={uid}
-                        style={[styles.membreChip, sel && styles.membreChipActive]}
-                        onPress={() => {
-                          update('membreCotisationUid', uid);
-                          update('payeurNom', m.nom || '');
-                        }}
-                      >
-                        <Text style={[styles.membreChipText, sel && styles.membreChipTextActive]}>
-                          {m.nom || 'Membre'}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            ) : (
-              <>
-                <Text style={styles.label}>PAYEUR / SOURCE</Text>
-                <View style={styles.inputBox}>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Nom acheteur, ONG, etc."
-                    placeholderTextColor="#9ca3af"
-                    value={form.payeurNom}
-                    onChangeText={(v) => update('payeurNom', v)}
-                  />
-                </View>
-                <Text style={styles.label}>NUMÉRO MOBILE MONEY DU PAYEUR</Text>
-                <View style={styles.inputBox}>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="+228 90 XX XX XX"
-                    placeholderTextColor="#9ca3af"
-                    value={form.telephonePayeur}
-                    onChangeText={(v) => update('telephonePayeur', v)}
-                    keyboardType="phone-pad"
-                  />
-                </View>
-                <Text style={styles.hintSmall}>
-                  Pour FedaPay : collecte après validation du vote si montant élevé.
-                </Text>
-              </>
-            )}
-          </View>
-        ) : null}
-
-        {/* CATÉGORIE */}
-        <Text style={styles.label}>CATÉGORIE</Text>
-        <View style={styles.catsGrid}>
-          {CATEGORIES.map(cat => (
-            <TouchableOpacity
-              key={cat}
-              style={[styles.catBtn, form.categorie === cat && styles.catBtnActive]}
-              onPress={() => update('categorie', cat)}
-            >
-              <Text style={[styles.catText, form.categorie === cat && styles.catTextActive]}>
-                {cat}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {/* FOURNISSEUR */}
-        <Text style={styles.label}>FOURNISSEUR / BÉNÉFICIAIRE</Text>
-        <View style={styles.inputBox}>
-          <TextInput
-            style={styles.input}
-            placeholder="Ex : Agri-Togo SARL"
-            placeholderTextColor="#9ca3af"
-            value={form.fournisseur}
-            onChangeText={v => update('fournisseur', v)}
-          />
-        </View>
-
-        {form.type === 'sortie' ? (
-          <View style={styles.paymentSection}>
-            <Text style={styles.sectionTitle}>💸 Paiement au fournisseur</Text>
-            <Text style={styles.sectionSubtitle}>
-              Comment voulez-vous payer le fournisseur ?
-            </Text>
-            <View style={styles.paymentModeRow}>
-              {[
-                { key: 'mobile_money', emoji: '📱', label: 'Mobile Money' },
-                { key: 'especes', emoji: '💵', label: 'Espèces' },
-                { key: 'virement', emoji: '🏦', label: 'Virement' },
-              ].map((mode) => (
-                <TouchableOpacity
-                  key={mode.key}
-                  style={[
-                    styles.paymentModeBtn,
-                    form.modePaiement === mode.key && styles.paymentModeBtnActive,
-                  ]}
-                  onPress={() => update('modePaiement', mode.key)}
-                >
-                  <Text style={styles.paymentModeEmoji}>{mode.emoji}</Text>
-                  <Text
-                    style={[
-                      styles.paymentModeText,
-                      form.modePaiement === mode.key && styles.paymentModeTextActive,
-                    ]}
-                  >
-                    {mode.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {form.modePaiement === 'mobile_money' ? (
-              <View>
-                <Text style={styles.label}>OPÉRATEUR</Text>
-                <View style={styles.paymentModeRow}>
-                  {OPERATEURS_DEPENSE.map((op) => (
-                    <TouchableOpacity
-                      key={op.key}
-                      style={[
-                        styles.operateurDepenseCard,
-                        { backgroundColor: op.fond, borderColor: form.operateurMobile === op.key ? op.couleur : `${op.couleur}44` },
-                        form.operateurMobile === op.key && { borderWidth: 2.5 },
-                      ]}
-                      onPress={() => update('operateurMobile', op.key)}
-                    >
-                      <Text style={styles.paymentModeEmoji}>{op.emoji}</Text>
-                      <Text style={[styles.operateurDepenseLabel, { color: op.couleur }]}>{op.label}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-                <Text style={styles.label}>NUMÉRO MOBILE MONEY DU FOURNISSEUR</Text>
-                <View style={styles.inputBox}>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="+228 90 XX XX XX"
-                    placeholderTextColor="#9ca3af"
-                    value={form.telephoneFournisseur}
-                    onChangeText={(v) => update('telephoneFournisseur', v)}
-                    keyboardType="phone-pad"
-                  />
-                </View>
-                <Text style={styles.hintSmall}>
-                  Paiement simulé en démo (FedaPay). Flooz / T-Money : couleurs indicatives.
-                </Text>
-              </View>
-            ) : null}
-
-            {form.modePaiement === 'virement' ? (
-              <View style={{ marginTop: 8 }}>
-                <Text style={styles.hintSmallOrange}>
-                  Virement simulé pour la démo — aucune donnée bancaire réelle n’est transmise.
-                </Text>
-                <Text style={styles.label}>NUMÉRO DE CARTE (16 chiffres)</Text>
-                <View style={styles.inputBox}>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="0000 0000 0000 0000"
-                    placeholderTextColor="#9ca3af"
-                    keyboardType="number-pad"
-                    maxLength={19}
-                    value={form.numeroCarte}
-                    onChangeText={(v) => update('numeroCarte', v)}
-                  />
-                </View>
-                <Text style={styles.label}>EXPIRATION (MM/AA)</Text>
-                <View style={styles.inputBox}>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="12/28"
-                    placeholderTextColor="#9ca3af"
-                    value={form.dateExpirationCarte}
-                    onChangeText={(v) => update('dateExpirationCarte', v)}
-                  />
-                </View>
-                <Text style={styles.label}>CVV</Text>
-                <View style={styles.inputBox}>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="•••"
-                    placeholderTextColor="#9ca3af"
-                    secureTextEntry
-                    keyboardType="number-pad"
-                    maxLength={3}
-                    value={form.cvvCarte}
-                    onChangeText={(v) => update('cvvCarte', v)}
-                  />
-                </View>
-                <Text style={styles.label}>RÉSEAU</Text>
-                <View style={styles.paymentModeRow}>
-                  {[
-                    { key: 'visa', label: 'Visa' },
-                    { key: 'mastercard', label: 'Mastercard' },
-                    { key: 'paypal', label: 'PayPal' },
-                  ].map((r) => (
-                    <TouchableOpacity
-                      key={r.key}
-                      style={[
-                        styles.paymentModeBtn,
-                        form.reseauPaiement === r.key && styles.paymentModeBtnActive,
-                      ]}
-                      onPress={() => update('reseauPaiement', r.key)}
-                    >
-                      <Text
-                        style={[
-                          styles.paymentModeText,
-                          form.reseauPaiement === r.key && styles.paymentModeTextActive,
-                        ]}
-                      >
-                        {r.label}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-            ) : null}
-
-            {form.modePaiement === 'especes' ? (
-              <View style={styles.especesEncart}>
-                <Text style={styles.especesEncartText}>
-                  📸 Photo du reçu signé obligatoire — joignez le justificatif ci-dessous avant d’enregistrer.
-                </Text>
-              </View>
-            ) : null}
-          </View>
-        ) : null}
-
-        {/* JUSTIFICATIF */}
-        <Text style={styles.label}>JUSTIFICATIF (OPTIONNEL)</Text>
-        <Text style={styles.justifHint}>
-          Photo compressée automatiquement (~500 Ko) puis envoyée sur Cloudinary. Seul le lien est stocké dans Firebase.
-        </Text>
-
-        {!justificatifUri ? (
-          <TouchableOpacity style={styles.justifBtn} onPress={ajouterJustificatif} disabled={busy}>
-            <Text style={styles.justifBtnText}>📸 Ajouter un justificatif</Text>
-            <Text style={styles.justifBtnSub}>Caméra ou galerie</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.justifPreviewBox}>
-            <Image source={{ uri: justificatifUri }} style={styles.justifImage} resizeMode="cover" />
-            <TouchableOpacity style={styles.justifRemove} onPress={retirerJustificatif} disabled={busy}>
-              <Text style={styles.justifRemoveText}>❌ Supprimer</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {uploadingJustificatif && (
-          <View style={styles.progressWrap}>
-            <Text style={styles.progressLabel}>Envoi du justificatif… {uploadProgress} %</Text>
-            <View style={styles.progressTrack}>
-              <View style={[styles.progressFill, { width: `${uploadProgress}%` }]} />
-            </View>
-          </View>
-        )}
-
-        {/* NOTE BLOCKCHAIN */}
-        <View style={styles.blockchainNote}>
-          <Text style={styles.blockchainNoteText}>
-            🔗 Cette transaction sera enregistrée de manière immuable sur la blockchain Polygon Amoy avec un hash cryptographique unique vérifiable sur Polygonscan.
-          </Text>
-        </View>
-
-        {/* BOUTON SOUMETTRE */}
-        <TouchableOpacity
-          style={[styles.btn, busy && { opacity: 0.6 }]}
-          onPress={soumettre}
-          disabled={busy}
-        >
-          {busy
-            ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <ActivityIndicator color="#fff" />
-                <Text style={styles.btnText}>
-                  {uploadingJustificatif ? `Justificatif ${uploadProgress} %` : 'Confirmation en cours...'}
-                </Text>
-              </View>
-            )
-            : (
-              <Text style={styles.btnText}>
-                {needsVote ? '⚡ Soumettre au Vote' : '✅ Enregistrer sur la Blockchain'}
-              </Text>
-            )
-          }
-        </TouchableOpacity>
-
-        {loading && !uploadingJustificatif && (
-          <Text style={styles.waitingText}>
-            En attente de confirmation du bloc Polygon (~5-30 sec)...
-          </Text>
-        )}
-
-        <View style={{ height: 40 }} />
-      </View>
-    </ScrollView>
-  );
 }
 
+};*/
+
+  
+
+const telechargerRapportPDF = async (r) => {
+
+try {
+
+const mois = r.mois || 'Mois';
+
+const annee = r.annee || '';
+
+const dateEnvoi = getDate(r.dateEnvoi); // getDate existe déjà dans votre fichier
+
+const dateStr = dateEnvoi ? dateEnvoi.toLocaleDateString('fr-FR') : '-';
+
+const nbNotifies = Number(r.nombreNotifies || 0);
+
+// ── Calculs financiers pour le rapport ──
+
+const totalEntreesVal = revenus || 0; // vos états existants
+
+const totalDepensesVal = depenses || 0;
+
+const soldeVal = solde || 0;
+
+const nbTransactions = transactions?.length || 0;
+
+// ── Dernières transactions (max 10) ──
+
+const dernieresTx = (transactions || []).slice(0, 10);
+
+const lignesTx = dernieresTx.map((tx) => {
+
+const isEntree = tx.type === 'entree' || tx.type === 'revenu';
+
+const montant = Number(tx.montant || 0).toLocaleString('fr-FR');
+
+const date = tx.date instanceof Date
+
+? tx.date.toLocaleDateString('fr-FR')
+
+: '—';
+
+const couleur = isEntree ? '#15803d' : '#dc2626';
+
+const signe = isEntree ? '+' : '-';
+
+return `
+
+<tr>
+
+<td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#374151;">
+
+${tx.titre || '—'}
+
+</td>
+
+<td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#6b7280;text-align:center;">
+
+${date}
+
+</td>
+
+<td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:13px;
+
+color:${couleur};font-weight:700;text-align:right;">
+
+${signe}${montant} FCFA
+
+</td>
+
+<td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;">
+
+<span style="background:${
+
+tx.statut === 'valide' ? '#dcfce7' :
+
+tx.statut === 'en_cours' ? '#fef9c3' : '#fee2e2'
+
+};color:${
+
+tx.statut === 'valide' ? '#15803d' :
+
+tx.statut === 'en_cours' ? '#b45309' : '#dc2626'
+
+};padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;">
+
+${tx.statut === 'valide' ? 'Validé' :
+
+tx.statut === 'en_cours' ? 'En cours' : tx.statut || '—'}
+
+</span>
+
+</td>
+
+</tr>
+
+`;
+
+}).join('');
+
+// ── Pourcentage pour la barre de progression ──
+
+const pctEntrees = totalEntreesVal + totalDepensesVal > 0
+
+? Math.round((totalEntreesVal / (totalEntreesVal + totalDepensesVal)) * 100)
+
+: 100;
+
+const pctDepenses = 100 - pctEntrees;
+
+// ── HTML du rapport ──
+
+const html = `
+
+<!DOCTYPE html>
+
+<html lang="fr">
+
+<head>
+
+<meta charset="UTF-8"/>
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+
+<title>Rapport ${mois} ${annee}</title>
+
+<style>
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+
+font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+
+background: #f8fafc;
+
+color: #111827;
+
+}
+
+/* ── En-tête ── */
+
+.header {
+
+background: linear-gradient(135deg, #14532d 0%, #15803d 60%, #16a34a 100%);
+
+color: white;
+
+padding: 36px 40px 28px;
+
+}
+
+.header-top {
+
+display: flex;
+
+justify-content: space-between;
+
+align-items: flex-start;
+
+margin-bottom: 20px;
+
+}
+
+.logo-zone { display: flex; align-items: center; gap: 14px; }
+
+.logo-circle {
+
+width: 52px; height: 52px; border-radius: 50%;
+
+background: rgba(255,255,255,0.2);
+
+display: flex; align-items: center; justify-content: center;
+
+font-size: 26px;
+
+}
+
+.logo-text { font-size: 24px; font-weight: 900; letter-spacing: -0.5px; }
+
+.logo-sub { font-size: 13px; opacity: 0.75; margin-top: 2px; }
+
+.badge-blockchain {
+
+background: rgba(255,255,255,0.15);
+
+border: 1px solid rgba(255,255,255,0.3);
+
+border-radius: 20px;
+
+padding: 6px 14px;
+
+font-size: 11px;
+
+font-weight: 700;
+
+letter-spacing: 0.5px;
+
+}
+
+.header-title {
+
+font-size: 28px; font-weight: 900;
+
+letter-spacing: -0.5px; margin-bottom: 6px;
+
+}
+
+.header-meta {
+
+font-size: 13px; opacity: 0.7;
+
+}
+
+/* ── Corps ── */
+
+.body { padding: 32px 40px; }
+
+/* ── Cartes stats ── */
+
+.stats-grid {
+
+display: grid;
+
+grid-template-columns: repeat(3, 1fr);
+
+gap: 16px;
+
+margin-bottom: 28px;
+
+}
+
+.stat-card {
+
+background: white;
+
+border-radius: 16px;
+
+padding: 20px;
+
+box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+
+border-top: 4px solid transparent;
+
+}
+
+.stat-card.solde { border-top-color: #15803d; }
+
+.stat-card.entrees { border-top-color: #2563eb; }
+
+.stat-card.depenses { border-top-color: #dc2626; }
+
+.stat-emoji { font-size: 22px; margin-bottom: 8px; }
+
+.stat-label { font-size: 11px; color: #6b7280; font-weight: 600;
+
+text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+
+.stat-value { font-size: 22px; font-weight: 900; }
+
+.stat-value.green { color: #15803d; }
+
+.stat-value.blue { color: #2563eb; }
+
+.stat-value.red { color: #dc2626; }
+
+/* ── Barre répartition ── */
+
+.section {
+
+background: white;
+
+border-radius: 16px;
+
+padding: 22px;
+
+margin-bottom: 20px;
+
+box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+
+}
+
+.section-title {
+
+font-size: 15px; font-weight: 800; color: #111827;
+
+margin-bottom: 16px;
+
+display: flex; align-items: center; gap: 8px;
+
+}
+
+.bar-container {
+
+height: 18px; background: #fee2e2; border-radius: 999px;
+
+overflow: hidden; margin-bottom: 12px;
+
+}
+
+.bar-fill {
+
+height: 100%; background: #15803d; border-radius: 999px;
+
+width: ${pctEntrees}%;
+
+}
+
+.bar-legend {
+
+display: flex; justify-content: space-between; font-size: 12px;
+
+}
+
+.legend-green { color: #15803d; font-weight: 700; }
+
+.legend-red { color: #dc2626; font-weight: 700; }
+
+/* ── Tableau ── */
+
+table { width: 100%; border-collapse: collapse; }
+
+thead tr { background: #f1f5f9; }
+
+thead th {
+
+padding: 10px 12px; text-align: left;
+
+font-size: 11px; font-weight: 700;
+
+color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px;
+
+}
+
+thead th:last-child { text-align: center; }
+
+thead th:nth-child(3){ text-align: right; }
+
+/* ── Infos coopérative ── */
+
+.coop-info {
+
+display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+
+margin-bottom: 20px;
+
+}
+
+.info-item {
+
+background: white; border-radius: 12px; padding: 14px 18px;
+
+box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+
+}
+
+.info-key { font-size: 11px; color: #9ca3af; font-weight: 600;
+
+text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 3px; }
+
+.info-value { font-size: 14px; font-weight: 700; color: #111827; }
+
+/* ── Pied de page ── */
+
+.footer {
+
+background: #14532d; color: rgba(255,255,255,0.7);
+
+padding: 20px 40px; text-align: center; font-size: 12px;
+
+margin-top: 32px;
+
+}
+
+.footer strong { color: #4ade80; }
+
+</style>
+
+</head>
+
+<body>
+
+<!-- EN-TÊTE -->
+
+<div class="header">
+
+<div class="header-top">
+
+<div class="logo-zone">
+
+<div class="logo-circle">🌱</div>
+
+<div>
+
+<div class="logo-text">CoopLedger</div>
+
+<div class="logo-sub">CTA de Broukou · Région de la Kara</div>
+
+</div>
+
+</div>
+
+<div class="badge-blockchain">⛓ Blockchain Polygon</div>
+
+</div>
+
+<div class="header-title">Rapport Mensuel — ${mois} ${annee}</div>
+
+<div class="header-meta">Généré le ${new Date().toLocaleDateString('fr-FR', {
+
+day: 'numeric', month: 'long', year: 'numeric'
+
+})} · Envoyé le : ${dateStr} · ${nbNotifies} membres notifiés</div>
+
+</div>
+
+<!-- CORPS -->
+
+<div class="body">
+
+<!-- Infos -->
+
+<div class="coop-info">
+
+<div class="info-item">
+
+<div class="info-key">Période</div>
+
+<div class="info-value">${mois} ${annee}</div>
+
+</div>
+
+<div class="info-item">
+
+<div class="info-key">Membres notifiés</div>
+
+<div class="info-value">${nbNotifies}</div>
+
+</div>
+
+<div class="info-item">
+
+<div class="info-key">Total opérations</div>
+
+<div class="info-value">${nbTransactions} transactions</div>
+
+</div>
+
+<div class="info-item">
+
+<div class="info-key">Date d'envoi</div>
+
+<div class="info-value">${dateStr}</div>
+
+</div>
+
+</div>
+
+<!-- Stats -->
+
+<div class="stats-grid">
+
+<div class="stat-card solde">
+
+<div class="stat-emoji">💰</div>
+
+<div class="stat-label">Solde net</div>
+
+<div class="stat-value green">
+
+${soldeVal.toLocaleString('fr-FR')} FCFA
+
+</div>
+
+</div>
+
+<div class="stat-card entrees">
+
+<div class="stat-emoji">📈</div>
+
+<div class="stat-label">Total entrées</div>
+
+<div class="stat-value blue">
+
+${totalEntreesVal.toLocaleString('fr-FR')} FCFA
+
+</div>
+
+</div>
+
+<div class="stat-card depenses">
+
+<div class="stat-emoji">📉</div>
+
+<div class="stat-label">Total dépenses</div>
+
+<div class="stat-value red">
+
+${totalDepensesVal.toLocaleString('fr-FR')} FCFA
+
+</div>
+
+</div>
+
+</div>
+
+<!-- Répartition -->
+
+<div class="section">
+
+<div class="section-title">📊 Répartition Entrées / Dépenses</div>
+
+<div class="bar-container">
+
+<div class="bar-fill"></div>
+
+</div>
+
+<div class="bar-legend">
+
+<span class="legend-green">● Entrées : ${pctEntrees}%
+
+(${totalEntreesVal.toLocaleString('fr-FR')} FCFA)
+
+</span>
+
+<span class="legend-red">● Dépenses : ${pctDepenses}%
+
+(${totalDepensesVal.toLocaleString('fr-FR')} FCFA)
+
+</span>
+
+</div>
+
+</div>
+
+<!-- Tableau transactions -->
+
+<div class="section">
+
+<div class="section-title">📋 Dernières transactions</div>
+
+${dernieresTx.length === 0
+
+? '<p style="color:#9ca3af;text-align:center;padding:20px;">Aucune transaction ce mois.</p>'
+
+: `<table>
+
+<thead>
+
+<tr>
+
+<th>Titre</th>
+
+<th style="text-align:center">Date</th>
+
+<th style="text-align:right">Montant</th>
+
+<th style="text-align:center">Statut</th>
+
+</tr>
+
+</thead>
+
+<tbody>${lignesTx}</tbody>
+
+</table>`
+
+}
+
+</div>
+
+</div>
+
+<!-- PIED DE PAGE -->
+
+<div class="footer">
+
+<strong>CoopLedger</strong> · Rapport généré automatiquement ·
+
+Source : Registre Firestore + preuves blockchain Polygon Amoy ·
+
+Destinataires : IFAD, Banques partenaires, Ministère de l'Agriculture
+
+</div>
+
+</body>
+
+</html>
+
+`;
+
+// ── Génération du PDF ──
+
+const { uri } = await Print.printToFileAsync({
+
+html,
+
+base64: false,
+
+});
+
+// ── Partage / téléchargement ──
+
+const canShare = await Sharing.isAvailableAsync();
+
+if (canShare) {
+
+await Sharing.shareAsync(uri, {
+
+mimeType: 'application/pdf',
+
+dialogTitle: `Rapport ${mois} ${annee} - CoopLedger`,
+
+UTI: 'com.adobe.pdf',
+
+});
+
+} else {
+
+// Fallback : Share natif React Native
+
+await Share.share({
+
+title: `Rapport ${mois} ${annee}`,
+
+message: `Rapport CoopLedger ${mois} ${annee}\nSolde : ${soldeVal.toLocaleString('fr-FR')} FCFA\nEntrées : ${totalEntreesVal.toLocaleString('fr-FR')} FCFA\nDépenses : ${totalDepensesVal.toLocaleString('fr-FR')} FCFA`,
+
+url: uri,
+
+});
+
+}
+
+} catch (e) {
+
+console.error('Erreur PDF:', e);
+
+Alert.alert(
+
+'Erreur PDF',
+
+'Impossible de générer le rapport PDF.\n\nAssurez-vous que expo-print et expo-sharing sont installés :\nnpx expo install expo-print expo-sharing',
+
+[{ text: 'OK' }]
+
+);
+
+}
+
+};
+
+  
+
+return (
+
+<View style={styles.chartBox}>
+
+<View style={{ alignItems: 'center', marginBottom: 12 }}>
+
+<Svg width={180} height={180} viewBox="0 0 180 180">
+
+<G rotation="-90" origin="90, 90">
+
+{/* Fond rouge (dépenses) */}
+
+<Circle
+
+cx="90" cy="90" r={radius}
+
+stroke="#dc2626"
+
+strokeWidth={strokeWidth}
+
+fill="transparent"
+
+strokeDasharray={`${circumference} ${circumference}`}
+
+strokeDashoffset={0}
+
+/>
+
+{/* Arc vert (entrées) */}
+
+<Circle
+
+cx="90" cy="90" r={radius}
+
+stroke="#15803d"
+
+strokeWidth={strokeWidth}
+
+fill="transparent"
+
+strokeDasharray={`${dashEntrees} ${circumference}`}
+
+strokeDashoffset={0}
+
+/>
+
+</G>
+
+{/* Texte central */}
+
+<SvgText x="90" y="85" textAnchor="middle" fontSize="22" fontWeight="900" fill="#111827">
+
+{pctEntrees}%
+
+</SvgText>
+
+<SvgText x="90" y="105" textAnchor="middle" fontSize="12" fill="#6b7280">
+
+Entrées
+
+</SvgText>
+
+</Svg>
+
+</View>
+
+<View style={styles.legendRow}><View style={[styles.dot, { backgroundColor: GREEN }]} /><Text>Entrées : {formaterMontant(revenus)}</Text></View>
+
+<View style={styles.legendRow}><View style={[styles.dot, { backgroundColor: '#dc2626' }]} /><Text>Dépenses : {formaterMontant(depenses)}</Text></View>
+
+<View style={styles.sep} />
+
+<Text style={[styles.netText, { color: solde >= 0 ? GREEN_DARK : '#dc2626' }]}>
+
+Solde net : {formaterMontant(solde)}
+
+</Text>
+
+</View>
+
+);
+
+}
+
+  
+
+function BarChart({ moisData }) {
+
+const maxValue = Math.max(1, ...moisData.map((m) => Math.max(m.entrees, m.depenses)));
+
+return (
+
+<View style={styles.barChartWrap}>
+
+<View style={styles.barLegend}>
+
+<Text style={styles.legendItem}>■ Entrées</Text>
+
+<Text style={[styles.legendItem, { color: '#dc2626' }]}>■ Dépenses</Text>
+
+</View>
+
+<View style={styles.barsRow}>
+
+{moisData.map((m) => {
+
+const hE = (m.entrees / maxValue) * 120;
+
+const hD = (m.depenses / maxValue) * 120;
+
+return (
+
+<View key={m.label} style={styles.monthCol}>
+
+<View style={styles.monthBars}>
+
+<View style={[styles.bar, { height: hE, backgroundColor: GREEN }]} />
+
+<View style={[styles.bar, { height: hD, backgroundColor: '#dc2626' }]} />
+
+</View>
+
+<Text style={styles.monthLabel}>{m.label}</Text>
+
+</View>
+
+);
+
+})}
+
+</View>
+
+</View>
+
+);
+
+}
+
+  
+
+export default function InstitutionDashboard({ userData }) {
+
+const [transactions, setTransactions] = useState([]);
+
+const [votes, setVotes] = useState([]);
+
+const [membresActifs, setMembresActifs] = useState([]);
+
+const [rapports, setRapports] = useState([]);
+
+const [loading, setLoading] = useState(true);
+
+  
+
+const coopId = userData?.cooperativeId || 'broukou';
+
+  
+
+useEffect(() => {
+
+const unsubs = [];
+
+let loaded = 0;
+
+const done = () => {
+
+loaded += 1;
+
+if (loaded >= 4) setLoading(false);
+
+};
+
+  
+
+unsubs.push(onSnapshot(collection(db, 'transactions'), (s) => {
+
+setTransactions(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+
+done();
+
+}, done));
+
+  
+
+unsubs.push(onSnapshot(collection(db, 'votes'), (s) => {
+
+setVotes(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+
+done();
+
+}, done));
+
+  
+
+unsubs.push(onSnapshot(
+
+query(collection(db, 'users'), where('statut', '==', 'actif'), where('cooperativeId', '==', coopId)),
+
+(s) => {
+
+const actifs = s.docs
+
+.map((d) => ({ id: d.id, ...d.data() }))
+
+.filter((u) => u.role !== 'institution');
+
+setMembresActifs(actifs);
+
+done();
+
+},
+
+done
+
+));
+
+  
+
+const rapportsQ = query(
+
+collection(db, 'rapports_envoyes'),
+
+where('cooperativeId', '==', coopId),
+
+orderBy('dateEnvoi', 'desc'),
+
+limit(12)
+
+);
+
+unsubs.push(onSnapshot(rapportsQ, (s) => {
+
+setRapports(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+
+done();
+
+}, done));
+
+  
+
+return () => unsubs.forEach((u) => u && u());
+
+}, [coopId]);
+
+  
+
+const txValides = useMemo(
+
+() => transactions.filter((t) => t?.statut === 'valide' && t?.cooperativeId === coopId),
+
+[transactions, coopId]
+
+);
+
+  
+
+const revenus = useMemo(
+
+() => txValides
+
+.filter((t) => ['cotisation', 'mobile_money', 'main_a_main'].includes(t.typeTransaction))
+
+.reduce((a, t) => a + Number(t.montant || 0), 0),
+
+[txValides]
+
+);
+
+const depenses = useMemo(
+
+() => txValides
+
+.filter((t) => t.typeTransaction === 'depense')
+
+.reduce((a, t) => a + Number(t.montant || 0), 0),
+
+[txValides]
+
+);
+
+const solde = revenus - depenses;
+
+  
+
+const score = useMemo(() => calculerScoreTransparence(txValides, votes), [txValides, votes]);
+
+  
+
+const transactionsRecentes = useMemo(() => (
+
+[...txValides]
+
+.sort((a, b) => (getDate(b.date)?.getTime() || 0) - (getDate(a.date)?.getTime() || 0))
+
+.slice(0, 10)
+
+), [txValides]);
+
+  
+
+const moisData = useMemo(() => {
+
+const now = new Date();
+
+const months = [];
+
+for (let i = 5; i >= 0; i -= 1) {
+
+const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+
+const label = d.toLocaleDateString('fr-FR', { month: 'short' });
+
+months.push({
+
+key: `${d.getFullYear()}-${d.getMonth()}`,
+
+label: label.charAt(0).toUpperCase() + label.slice(1, 3),
+
+entrees: 0,
+
+depenses: 0,
+
+});
+
+}
+
+txValides.forEach((t) => {
+
+const d = getDate(t.date);
+
+if (!d) return;
+
+const key = `${d.getFullYear()}-${d.getMonth()}`;
+
+const item = months.find((m) => m.key === key);
+
+if (!item) return;
+
+const amount = Number(t.montant || 0);
+
+if (t.typeTransaction === 'depense') item.depenses += amount;
+
+else item.entrees += amount;
+
+});
+
+return months.map(({ key, ...rest }) => rest);
+
+}, [txValides]);
+
+  
+
+function contacterCoop() {
+
+const subject = encodeURIComponent('Demande de financement - CTA de Broukou');
+
+const body = encodeURIComponent(
+
+`Bonjour, suite à la consultation du score de transparence CoopLedger de la coopérative CTA de Broukou (score: ${score.total}/100), nous souhaitons...`
+
+);
+
+const email = userData?.emailPresident || userData?.email || 'contact@coopledger.tg';
+
+Linking.openURL(`mailto:${email}?subject=${subject}&body=${body}`);
+
+}
+
+  
+
+if (loading) {
+
+return (
+
+<View style={styles.centered}>
+
+<ActivityIndicator size="large" color={GREEN} />
+
+<Text style={styles.loadingText}>Chargement des données institutionnelles...</Text>
+
+</View>
+
+);
+
+}
+
+  
+
+return (
+
+<ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 30 }}>
+
+<View style={styles.header}>
+
+<TouchableOpacity
+
+onPress={() => {
+
+Alert.alert(
+
+'Se déconnecter ?',
+
+'Vous devrez vous reconnecter avec\nvos identifiants.',
+
+[
+
+{ text: 'Annuler', style: 'cancel' },
+
+{
+
+text: 'Se déconnecter',
+
+style: 'destructive',
+
+onPress: () => signOut(auth),
+
+},
+
+]
+
+);
+
+}}
+
+style={styles.logoutHeaderBtn}
+
+>
+
+<Text style={styles.logoutHeaderText}>🚪 Déconnexion</Text>
+
+</TouchableOpacity>
+
+<Text style={styles.logo}>🌱 CoopLedger</Text>
+
+<Text style={styles.title}>🏦 Espace Institution</Text>
+
+<Text style={styles.subtitle}>{userData?.nom || 'Institution'}</Text>
+
+<View style={styles.readOnlyBadge}><Text style={styles.readOnlyText}>Lecture seule</Text></View>
+
+</View>
+
+  
+
+<View style={styles.card}>
+
+<Text style={styles.cardTitle}>📊 Score de Transparence</Text>
+
+<Text style={styles.cardSub}>{COOP_NOM} · {COOP_REGION}</Text>
+
+<Text style={[styles.scoreValue, { color: score.couleur }]}>{score.total} / 100</Text>
+
+<ProgressBar value={score.total} max={100} color={score.couleur} />
+
+<Text style={[styles.scoreLine, { color: score.couleur }]}>{score.badge} {score.texte}</Text>
+
+<Text style={styles.scoreLine}>{score.texteElig}</Text>
+
+  
+
+<Text style={styles.criteriaTitle}>Détail des critères :</Text>
+
+<Text style={styles.criteriaLabel}>🔗 Traçabilité {score.score1}/25</Text><ProgressBar value={score.score1} max={25} />
+
+<Text style={styles.criteriaLabel}>🗳️ Votes {score.score2}/25</Text><ProgressBar value={score.score2} max={25} />
+
+<Text style={styles.criteriaLabel}>📎 Justificatifs {score.score3}/20</Text><ProgressBar value={score.score3} max={20} />
+
+<Text style={styles.criteriaLabel}>📅 Activité {score.score4}/15</Text><ProgressBar value={score.score4} max={15} />
+
+<Text style={styles.criteriaLabel}>💰 Finances {score.score5}/15</Text><ProgressBar value={score.score5} max={15} />
+
+</View>
+
+  
+
+<View style={styles.grid}>
+
+<View style={styles.statCard}><Text>💰 Solde total</Text><Text style={[styles.statValue, { color: solde >= 0 ? GREEN : '#dc2626' }]}>{formaterMontant(solde)}</Text></View>
+
+<View style={styles.statCard}><Text>📈 Total entrées</Text><Text style={[styles.statValue, { color: GREEN }]}>{formaterMontant(revenus)}</Text></View>
+
+<View style={styles.statCard}><Text>📉 Total dépenses</Text><Text style={[styles.statValue, { color: '#dc2626' }]}>{formaterMontant(depenses)}</Text></View>
+
+<View style={styles.statCard}><Text>👥 Membres actifs</Text><Text style={styles.statValue}>{membresActifs.length}</Text></View>
+
+</View>
+
+  
+
+<View style={styles.card}><Text style={styles.cardTitle}>Répartition Entrées / Dépenses</Text><DonutChart revenus={revenus} depenses={depenses} /></View>
+
+<View style={styles.card}><Text style={styles.cardTitle}>Évolution sur 6 mois</Text><BarChart moisData={moisData} /></View>
+
+  
+
+<View style={styles.card}>
+
+<Text style={styles.cardTitle}>Transactions récentes</Text>
+
+{transactionsRecentes.map((tx) => {
+
+const badge = getBadgeType(tx.typeTransaction);
+
+const isDep = tx.typeTransaction === 'depense';
+
+const date = getDate(tx.date);
+
+const hash = String(tx.hash || '');
+
+return (
+
+<View key={tx.id} style={styles.txRow}>
+
+<View style={[styles.txBadge, { backgroundColor: badge.fondCouleur }]}><Text style={{ color: badge.couleur }}>{badge.emoji} {badge.label}</Text></View>
+
+<View style={{ flex: 1 }}>
+
+<Text style={styles.txTitle}>{tx.titre || 'Transaction'}</Text>
+
+<Text style={styles.txDate}>{date ? date.toLocaleDateString('fr-FR') : '-'}</Text>
+
+{hash ? <Text style={styles.txHash}>{hash.slice(0, 6)}...{hash.slice(-4)}</Text> : null}
+
+</View>
+
+<Text style={[styles.txAmount, { color: isDep ? '#dc2626' : GREEN }]}>{isDep ? '-' : '+'}{formaterMontant(tx.montant)}</Text>
+
+</View>
+
+);
+
+})}
+
+</View>
+
+  
+
+<View style={styles.card}>
+
+<Text style={styles.cardTitle}>Rapports mensuels</Text>
+
+{rapports.length === 0 ? (
+
+<Text style={styles.emptyText}>Aucun rapport disponible pour le moment.</Text>
+
+) : rapports.map((r) => {
+
+const d = getDate(r.dateEnvoi);
+
+const mois = r.mois || 'Mois';
+
+const annee = r.annee || '';
+
+return (
+
+<View key={r.id} style={styles.reportItem}>
+
+<Text style={styles.reportTitle}>📄 Rapport {mois} {annee}</Text>
+
+<Text style={styles.reportMeta}>Envoyé le : {d ? d.toLocaleDateString('fr-FR') : '-'}</Text>
+
+<Text style={styles.reportMeta}>Membres notifiés : {Number(r.nombreNotifies || 0)}</Text>
+
+{/*<TouchableOpacity
+
+style={styles.askBtn}
+
+onPress={() => Linking.openURL(`mailto:${userData?.email || 'contact@coopledger.tg'}?subject=${encodeURIComponent(`Demande rapport ${mois}`)}`)}
+
+>
+
+<Text style={styles.askBtnText}>📧 Demander ce rapport</Text>
+
+</TouchableOpacity>*/}
+
+<TouchableOpacity
+
+style={{
+
+backgroundColor: '#14532d',
+
+borderRadius: 12,
+
+paddingVertical: 12,
+
+paddingHorizontal: 16,
+
+flexDirection: 'row',
+
+alignItems: 'center',
+
+justifyContent: 'center',
+
+gap: 8,
+
+marginTop: 10,
+
+}}
+
+onPress={() => telechargerRapportPDF(r)}
+
+>
+
+<Text style={{ color: '#fff', fontWeight: '800', fontSize: 14 }}>
+
+📥 Télécharger le rapport PDF
+
+</Text>
+
+</TouchableOpacity>
+
+  
+
+</View>
+
+);
+
+})}
+
+</View>
+
+  
+
+<TouchableOpacity style={styles.contactBtn} onPress={contacterCoop}>
+
+<Text style={styles.contactBtnText}>📧 Contacter la coopérative</Text>
+
+</TouchableOpacity>
+
+</ScrollView>
+
+);
+
+}
+
+  
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8fafc' },
-  soldeCard: {
-    backgroundColor: '#f1f5f9',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    marginBottom: 8,
-  },
-  soldeLoadingRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  soldeLoadingText: { fontSize: 13, color: '#475569', fontWeight: '700' },
-  soldeText: { fontSize: 14, fontWeight: '800', color: GREEN_DARK },
-  soldeWarnText: {
-    marginTop: 8,
-    color: '#dc2626',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  label: { fontSize: 11, fontWeight: '700', color: '#6b7280', letterSpacing: 1, marginBottom: 8, marginTop: 16 },
-  typeRow: { flexDirection: 'row', gap: 10, marginBottom: 4 },
-  typeBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: '#fff', borderWidth: 2, borderColor: '#e5e7eb', borderRadius: 16, paddingVertical: 14,
-  },
-  typeBtnActive: { borderColor: GREEN, backgroundColor: '#f0fdf4' },
-  typeBtnText: { fontSize: 15, fontWeight: '700', color: '#6b7280' },
-  typeBtnTextActive: { color: GREEN },
-  inputBox: {
-    flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff',
-    borderWidth: 1.5, borderColor: '#e5e7eb', borderRadius: 14,
-    paddingHorizontal: 14, paddingVertical: 12,
-  },
-  input: { flex: 1, fontSize: 15, color: '#111827' },
-  alertBox: {
-    flexDirection: 'row', gap: 10, alignItems: 'flex-start', backgroundColor: '#fffbeb',
-    borderWidth: 1.5, borderColor: '#fbbf24', borderRadius: 14, padding: 14, marginTop: 8,
-  },
-  alertTitle: { fontSize: 14, fontWeight: '700', color: '#92400e' },
-  alertSub: { fontSize: 12, color: '#b45309', marginTop: 4, lineHeight: 16 },
-  catsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  catBtn: {
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
-    backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#e5e7eb',
-  },
-  catBtnActive: { backgroundColor: GREEN, borderColor: GREEN },
-  catText: { fontSize: 13, fontWeight: '600', color: '#374151' },
-  catTextActive: { color: '#fff' },
-  justifHint: { fontSize: 12, color: '#6b7280', marginBottom: 10, lineHeight: 17 },
-  justifBtn: {
-    backgroundColor: '#fff', borderWidth: 2, borderColor: GREEN, borderRadius: 16,
-    paddingVertical: 16, alignItems: 'center',
-  },
-  justifBtnText: { color: GREEN_DARK, fontSize: 16, fontWeight: '800' },
-  justifBtnSub: { color: '#6b7280', fontSize: 12, marginTop: 4 },
-  justifPreviewBox: {
-    backgroundColor: '#fff', borderRadius: 16, borderWidth: 1.5, borderColor: '#e5e7eb',
-    overflow: 'hidden',
-  },
-  justifImage: { width: '100%', height: 150, backgroundColor: '#f3f4f6' },
-  justifRemove: { paddingVertical: 12, alignItems: 'center', backgroundColor: '#fef2f2' },
-  justifRemoveText: { color: '#b91c1c', fontWeight: '700', fontSize: 14 },
-  progressWrap: { marginTop: 12 },
-  progressLabel: { fontSize: 13, fontWeight: '600', color: GREEN_DARK, marginBottom: 6 },
-  progressTrack: {
-    height: 10, borderRadius: 8, backgroundColor: '#e5e7eb', overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%', backgroundColor: GREEN, borderRadius: 8,
-  },
-  blockchainNote: {
-    backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#86efac',
-    borderRadius: 14, padding: 14, marginTop: 16,
-  },
-  blockchainNoteText: { fontSize: 12, color: GREEN_DARK, lineHeight: 18 },
-  btn: {
-    backgroundColor: GREEN, borderRadius: 16, paddingVertical: 18, alignItems: 'center', marginTop: 20,
-    shadowColor: GREEN_DARK, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, elevation: 6,
-    flexDirection: 'row', justifyContent: 'center',
-  },
-  btnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
-  waitingText: { textAlign: 'center', color: '#6b7280', fontSize: 12, marginTop: 10, fontStyle: 'italic' },
-  appelBtn: {
-    backgroundColor: '#ecfdf5',
-    borderWidth: 1.5,
-    borderColor: GREEN,
-    borderRadius: 14,
-    paddingVertical: 12,
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  appelBtnText: { color: GREEN_DARK, fontWeight: '800', fontSize: 14 },
-  paymentSection: {
-    backgroundColor: '#f0fdf4',
-    borderRadius: 12,
-    padding: 16,
-    marginTop: 12,
-  },
-  sectionTitle: { fontSize: 15, fontWeight: '800', color: GREEN_DARK, marginBottom: 4 },
-  sectionSubtitle: { fontSize: 13, color: '#4b5563', marginBottom: 4 },
-  revenuSection: {
-    backgroundColor: '#eff6ff',
-    borderRadius: 12,
-    padding: 14,
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-  },
-  paymentModeRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginVertical: 12,
-  },
-  paymentModeBtn: {
-    flexGrow: 1,
-    flexBasis: '30%',
-    minWidth: '28%',
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 10,
-    padding: 10,
-    alignItems: 'center',
-    backgroundColor: 'white',
-  },
-  paymentModeBtnActive: {
-    borderColor: '#15803d',
-    backgroundColor: '#f0fdf4',
-  },
-  paymentModeEmoji: { fontSize: 20 },
-  paymentModeText: {
-    fontSize: 11,
-    color: '#6b7280',
-    marginTop: 4,
-    textAlign: 'center',
-  },
-  paymentModeTextActive: {
-    color: '#15803d',
-    fontWeight: '700',
-  },
-  hintSmall: { fontSize: 12, color: '#6b7280', marginTop: 4 },
-  hintSmallOrange: {
-    fontSize: 12,
-    color: '#b45309',
-    marginBottom: 8,
-    lineHeight: 17,
-    fontWeight: '600',
-  },
-  operateurDepenseCard: {
-    flex: 1,
-    minWidth: '44%',
-    borderRadius: 14,
-    borderWidth: 1.5,
-    paddingVertical: 14,
-    paddingHorizontal: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  operateurDepenseLabel: { fontSize: 13, fontWeight: '800', marginTop: 6, textAlign: 'center' },
-  especesEncart: {
-    backgroundColor: '#fef3c7',
-    borderRadius: 10,
-    padding: 12,
-    marginTop: 8,
-  },
-  especesEncartText: { color: '#92400e', fontSize: 13 },
-  membreChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: '#fff',
-    borderWidth: 1.5,
-    borderColor: '#e5e7eb',
-    marginRight: 8,
-  },
-  membreChipActive: { borderColor: GREEN, backgroundColor: '#f0fdf4' },
-  membreChipText: { fontSize: 13, fontWeight: '600', color: '#374151' },
-  membreChipTextActive: { color: GREEN_DARK, fontWeight: '800' },
+
+container: { flex: 1, backgroundColor: '#f8fafc' },
+
+centered: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc' },
+
+loadingText: { marginTop: 10, color: '#6b7280' },
+
+header: {
+
+position: 'relative',
+
+backgroundColor: GREEN_DARK,
+
+padding: 18,
+
+borderBottomLeftRadius: 24,
+
+borderBottomRightRadius: 24,
+
+},
+
+logoutHeaderBtn: {
+
+position: 'absolute',
+
+right: 16,
+
+top: 18,
+
+padding: 8,
+
+zIndex: 2,
+
+},
+
+logoutHeaderText: {
+
+color: '#fca5a5',
+
+fontSize: 13,
+
+fontWeight: '700',
+
+},
+
+logo: { color: '#fff', fontWeight: '900', fontSize: 20 },
+
+title: { color: '#fff', marginTop: 8, fontSize: 18, fontWeight: '900' },
+
+subtitle: { color: 'rgba(255,255,255,0.8)', marginTop: 4 },
+
+readOnlyBadge: { marginTop: 10, alignSelf: 'flex-start', backgroundColor: '#fff', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
+
+readOnlyText: { color: GREEN_DARK, fontWeight: '800', fontSize: 12 },
+
+card: { backgroundColor: '#fff', margin: 14, marginBottom: 0, borderRadius: 16, padding: 14, borderWidth: 1, borderColor: '#e5e7eb' },
+
+cardTitle: { fontSize: 16, fontWeight: '900', color: '#111827', marginBottom: 4 },
+
+cardSub: { color: '#6b7280', marginBottom: 10 },
+
+scoreValue: { fontSize: 34, fontWeight: '900', textAlign: 'center', marginVertical: 8 },
+
+scoreLine: { fontWeight: '700', textAlign: 'center', marginTop: 5, color: '#374151' },
+
+criteriaTitle: { marginTop: 10, fontWeight: '800', color: '#111827' },
+
+criteriaLabel: { marginTop: 8, fontSize: 12, color: '#374151', fontWeight: '700' },
+
+progressTrack: { height: 8, borderRadius: 999, backgroundColor: '#e5e7eb', overflow: 'hidden', marginTop: 4 },
+
+progressFill: { height: '100%', borderRadius: 999 },
+
+grid: { paddingHorizontal: 14, marginTop: 14, flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+
+statCard: { width: '47%', backgroundColor: '#fff', borderRadius: 14, padding: 12, borderWidth: 1, borderColor: '#e5e7eb' },
+
+statValue: { fontWeight: '900', fontSize: 18, marginTop: 6, color: '#111827' },
+
+chartBox: { alignItems: 'center', marginTop: 10 },
+
+donutOuter: { width: 180, height: 180, borderRadius: 90, overflow: 'hidden', position: 'relative', backgroundColor: '#fff' },
+
+donutHalfLeft: { position: 'absolute', left: 0, top: 0, bottom: 0, width: '50%', backgroundColor: GREEN },
+
+donutHalfRight: { position: 'absolute', right: 0, top: 0, bottom: 0, width: '50%', backgroundColor: '#dc2626' },
+
+donutInner: { position: 'absolute', width: 110, height: 110, borderRadius: 55, backgroundColor: '#fff', top: 35, left: 35, alignItems: 'center', justifyContent: 'center' },
+
+donutPct: { fontWeight: '900', fontSize: 24, color: '#111827' },
+
+donutLabel: { color: '#6b7280', fontSize: 12 },
+
+legendRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
+
+dot: { width: 10, height: 10, borderRadius: 5 },
+
+sep: { width: '100%', borderTopWidth: 1, borderTopColor: '#e5e7eb', marginTop: 10, paddingTop: 10 },
+
+netText: { fontWeight: '900' },
+
+emptyChart: { color: '#6b7280', marginTop: 8 },
+
+barChartWrap: { marginTop: 8 },
+
+barLegend: { flexDirection: 'row', gap: 14, marginBottom: 8 },
+
+legendItem: { color: GREEN, fontWeight: '700', fontSize: 12 },
+
+barsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
+
+monthCol: { flex: 1, alignItems: 'center' },
+
+monthBars: { height: 120, flexDirection: 'row', alignItems: 'flex-end', gap: 4 },
+
+bar: { width: 10, borderTopLeftRadius: 4, borderTopRightRadius: 4 },
+
+monthLabel: { marginTop: 6, fontSize: 11, color: '#4b5563' },
+
+txRow: { flexDirection: 'row', alignItems: 'center', gap: 8, borderBottomWidth: 1, borderBottomColor: '#f3f4f6', paddingVertical: 10 },
+
+txBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10 },
+
+txTitle: { fontWeight: '800', color: '#111827', fontSize: 13 },
+
+txDate: { color: '#6b7280', fontSize: 11, marginTop: 2 },
+
+txHash: { color: '#15803d', fontSize: 11, fontFamily: 'monospace', marginTop: 2 },
+
+txAmount: { fontWeight: '900', fontSize: 12 },
+
+emptyText: { color: '#6b7280', marginTop: 8 },
+
+reportItem: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, padding: 10, marginTop: 8 },
+
+reportTitle: { fontWeight: '900', color: '#111827' },
+
+reportMeta: { color: '#6b7280', marginTop: 4, fontSize: 12 },
+
+askBtn: { marginTop: 8, backgroundColor: '#ecfdf5', borderRadius: 10, paddingVertical: 8, alignItems: 'center' },
+
+askBtnText: { color: GREEN_DARK, fontWeight: '800' },
+
+contactBtn: { margin: 14, backgroundColor: GREEN, borderRadius: 14, paddingVertical: 15, alignItems: 'center' },
+
+contactBtnText: { color: '#fff', fontWeight: '900', fontSize: 16 },
+
 });
